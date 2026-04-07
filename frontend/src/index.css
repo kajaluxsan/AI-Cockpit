@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background-color: #0a0a0b;
+    color: #f4f4f5;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background-color: #d4a85333;
+    color: #f4f4f5;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-bg-surface border border-bg-border rounded-lg;
+  }
+  .card-elevated {
+    @apply bg-bg-elevated border border-bg-border rounded-lg shadow-lg;
+  }
+  .pill {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-mono uppercase tracking-wider;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center px-4 py-2 rounded-md font-medium transition-colors;
+  }
+  .btn-primary {
+    @apply btn bg-amber-accent text-bg hover:bg-amber-dim;
+  }
+  .btn-secondary {
+    @apply btn bg-bg-elevated border border-bg-border text-text-primary hover:border-amber-accent;
+  }
+  .btn-ghost {
+    @apply btn text-text-secondary hover:text-text-primary hover:bg-bg-elevated;
+  }
+  .input {
+    @apply w-full bg-bg-elevated border border-bg-border rounded-md px-3 py-2 text-text-primary placeholder:text-text-muted focus:outline-none focus:border-amber-accent;
+  }
+  .table-row {
+    @apply border-b border-bg-border hover:bg-bg-elevated transition-colors;
+  }
+  .label-mono {
+    @apply font-mono text-xs text-text-muted uppercase tracking-wider;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0a0a0b;
+}
+::-webkit-scrollbar-thumb {
+  background: #22222a;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2f2f3a;
+}
