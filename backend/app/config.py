@@ -210,6 +210,28 @@ class Settings(BaseSettings):
     linkedin_scraper_base_url: str = "https://nubela.co/proxycurl/api/v2/linkedin"
 
     # ---------------------------------------------------------------
+    # SEMANTIC MATCHING (Qdrant + BGE-M3)
+    # ---------------------------------------------------------------
+    # When enabled and reachable, the matching engine uses dense vector
+    # similarity (via BGE-M3 embeddings stored in Qdrant) to pre-filter
+    # the candidate pool before running the deterministic/LLM scoring
+    # step. When disabled or unreachable, we fall back to the classic
+    # "score every pair" path — the UX is identical, just slower for
+    # large datasets.
+    qdrant_enabled: bool = False
+    qdrant_url: str = "http://qdrant:6333"
+    qdrant_api_key: str | None = None
+    qdrant_collection_candidates: str = "recruiterai_candidates"
+    qdrant_collection_jobs: str = "recruiterai_jobs"
+    # Embedding model to use with fastembed. BGE-M3 gives the best
+    # multilingual quality but is large (~2.2 GB). For tight-memory
+    # setups BAAI/bge-small-en-v1.5 is a reasonable fallback.
+    embedding_model: str = "BAAI/bge-m3"
+    # How many semantic neighbours to retrieve before applying the
+    # deterministic score on top.
+    semantic_top_k: int = 50
+
+    # ---------------------------------------------------------------
     # AGENT IDENTITY
     # ---------------------------------------------------------------
     agent_name: str = "Lara"

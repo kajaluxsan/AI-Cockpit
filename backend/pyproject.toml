@@ -30,6 +30,9 @@ dependencies = [
     "tenacity>=9.0.0",
     "email-validator>=2.2.0",
     "python-dateutil>=2.9.0",
+    # Semantic matching (optional at runtime — gated by QDRANT_ENABLED).
+    "qdrant-client>=1.12.0",
+    "fastembed>=0.4.0",
 ]
 
 [tool.uv]

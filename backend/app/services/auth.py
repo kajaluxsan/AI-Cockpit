@@ -29,12 +29,11 @@ Design choices:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Annotated
 
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from fastapi import Cookie, Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -163,28 +162,57 @@ async def authenticate_user(
 
 
 # ---------------------------------------------------------------------------
+# Cookie helpers
+# ---------------------------------------------------------------------------
+def set_session_cookie(response: Response, token: str) -> None:
+    """Write the session JWT onto the response as an httpOnly cookie.
+
+    The cookie flags are driven from settings so we can enable ``secure``
+    (HTTPS-only) in production without touching code. Max-age matches the
+    JWT lifetime so browsers auto-forget the cookie once the token dies.
+    """
+    settings = get_settings()
+    response.set_cookie(
+        key=settings.auth_cookie_name,
+        value=token,
+        max_age=settings.auth_session_minutes * 60,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite=settings.auth_cookie_samesite,
+        path="/",
+    )
+
+
+def clear_session_cookie(response: Response) -> None:
+    """Tell the browser to drop the session cookie immediately."""
+    settings = get_settings()
+    response.delete_cookie(
+        key=settings.auth_cookie_name,
+        path="/",
+    )
+
+
+# ---------------------------------------------------------------------------
 # FastAPI dependencies
 # ---------------------------------------------------------------------------
-async def get_current_user(
-    session_token: Annotated[str | None, Cookie(alias=None)] = None,
+async def current_user_dep(
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """FastAPI dependency: require a valid session cookie.
 
-    Raises 401 if the cookie is missing, the token is invalid/expired,
-    or the user has been deactivated since login.
+    Usage::
+
+        from fastapi import Depends
+        from app.services.auth import current_user_dep
+
+        @router.get("/things")
+        async def list_things(user = Depends(current_user_dep)):
+            ...
+
+    Raises 401 when the cookie is missing, the JWT is invalid/expired, or
+    the user has been deactivated since the token was issued.
     """
-    settings = get_settings()
-    # We can't parameterise the Cookie alias from settings because it's a
-    # call-time value, so look the cookie up manually from the request.
-    # (Doing this via Request is cleaner — see ``_current_user_from_request``.)
-    raise HTTPException(  # pragma: no cover — unused, see below
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail="get_current_user should not be called directly",
-    )
-
-
-async def _current_user_from_request(request, db: AsyncSession) -> User:
     settings = get_settings()
     token = request.cookies.get(settings.auth_cookie_name)
     if not token:
@@ -193,7 +221,10 @@ async def _current_user_from_request(request, db: AsyncSession) -> User:
             detail="Not authenticated",
         )
     payload = decode_session_token(token)
-    user_id = int(payload.get("sub") or 0)
+    try:
+        user_id = int(payload.get("sub") or 0)
+    except (TypeError, ValueError):
+        user_id = 0
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -210,41 +241,53 @@ async def _current_user_from_request(request, db: AsyncSession) -> User:
     return user
 
 
-async def current_user_dep(
-    request,
-    db: AsyncSession = Depends(get_db),
-) -> User:
-    """Actual dependency to use on protected routes.
-
-    Usage::
-
-        from fastapi import Depends
-        from app.services.auth import current_user_dep
-
-        @router.get("/things")
-        async def list_things(user = Depends(current_user_dep)):
-            ...
-    """
-    from fastapi import Request  # noqa: WPS433 — local to avoid circular import
-
-    if not isinstance(request, Request):
-        # Depends() passes the Request object automatically thanks to the
-        # type hint on the function signature; we just use the plain
-        # ``request`` name here. If this ever fires something is wrong
-        # with the framework wiring.
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Auth dependency wiring broken",
-        )
-    return await _current_user_from_request(request, db)
-
-
 async def current_admin_dep(
     user: User = Depends(current_user_dep),
 ) -> User:
+    """FastAPI dependency: require the authenticated user be an admin."""
     if not user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required",
         )
     return user
+
+
+# ---------------------------------------------------------------------------
+# First-boot admin bootstrap
+# ---------------------------------------------------------------------------
+async def bootstrap_admin_if_needed(db: AsyncSession) -> None:
+    """Create the initial admin from env on the very first startup.
+
+    Only runs when:
+      - ``AUTH_BOOTSTRAP_ADMIN_USERNAME`` and ``...PASSWORD`` are set
+      - the ``users`` table is completely empty
+
+    Once any user exists (created here or via the API), this is a no-op
+    forever. Logs loudly so an operator notices the bootstrap happened.
+    """
+    settings = get_settings()
+    username = (settings.auth_bootstrap_admin_username or "").strip()
+    password = settings.auth_bootstrap_admin_password or ""
+    if not username or not password:
+        logger.debug("Auth bootstrap skipped: no AUTH_BOOTSTRAP_ADMIN_* configured")
+        return
+
+    existing = (await db.execute(select(User).limit(1))).scalar_one_or_none()
+    if existing is not None:
+        logger.debug("Auth bootstrap skipped: users table already populated")
+        return
+
+    user = User(
+        username=username,
+        email=(settings.auth_bootstrap_admin_email or None),
+        password_hash=hash_password(password),
+        is_admin=True,
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    logger.warning(
+        f"Auth bootstrap: created initial admin user={username!r}. "
+        "Rotate the password and clear AUTH_BOOTSTRAP_ADMIN_* from env."
+    )

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { useAuth } from "@/hooks/useAuth";
 
 const PRIMARY_TABS = [
   { to: "/people", label: "People" },
@@ -9,15 +10,23 @@ const PRIMARY_TABS = [
 
 const SECONDARY_LINKS = [
   { to: "/overview", label: "Overview" },
+  { to: "/reports", label: "Reports" },
   { to: "/matches", label: "Matches" },
   { to: "/calls", label: "Calls" },
   { to: "/emails", label: "Emails" },
+  { to: "/templates", label: "Templates" },
   { to: "/settings", label: "Settings" },
 ];
 
 export default function Layout() {
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const { user, logout } = useAuth();
+
+  const initial = (user?.full_name || user?.username || "R")
+    .trim()
+    .charAt(0)
+    .toUpperCase();
 
   return (
     <div className="min-h-screen flex flex-col bg-bg text-text-primary">
@@ -77,10 +86,26 @@ export default function Layout() {
                   {l.label}
                 </NavLink>
               ))}
+              <div className="border-t border-bg-border my-1" />
+              {user && (
+                <div className="px-4 py-2 text-xs text-text-secondary">
+                  {user.full_name || user.username}
+                  {user.is_admin ? " · Admin" : ""}
+                </div>
+              )}
+              <button
+                onClick={() => {
+                  setMenuOpen(false);
+                  void logout();
+                }}
+                className="w-full text-left px-4 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-bg-elevated"
+              >
+                Abmelden
+              </button>
             </div>
           )}
           <div className="w-8 h-8 rounded-full bg-bg-elevated border border-bg-border flex items-center justify-center text-sm font-medium text-amber-accent">
-            R
+            {initial}
           </div>
         </div>
       </header>

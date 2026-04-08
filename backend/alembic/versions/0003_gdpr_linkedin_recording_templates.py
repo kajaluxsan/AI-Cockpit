@@ -1,4 +1,4 @@
-"""gdpr + auth + linkedin + call recording + email templates
+"""gdpr + auth + linkedin + email templates
 
 Revision ID: 0003
 Revises: 0002
@@ -7,9 +7,12 @@ Create Date: 2026-04-08 00:00:00.000000
 Adds:
 - candidates.linkedin_url
 - candidates GDPR columns (consent + deletion + retention)
-- call_logs recording columns (url, duration)
 - email_templates table
 - users table
+
+Note: ``call_logs.recording_url`` already existed in 0001 and is reused
+by the new call-recording playback flow — no schema change is needed
+for recordings themselves.
 """
 from __future__ import annotations
 
@@ -56,16 +59,6 @@ def upgrade() -> None:
     op.add_column(
         "candidates",
         sa.Column("retain_until", sa.DateTime(timezone=True), nullable=True),
-    )
-
-    # --- call_logs: recording ---
-    op.add_column(
-        "call_logs",
-        sa.Column("recording_url", sa.String(length=1000), nullable=True),
-    )
-    op.add_column(
-        "call_logs",
-        sa.Column("recording_duration_seconds", sa.Integer(), nullable=True),
     )
 
     # --- email_templates ---
@@ -140,8 +133,6 @@ def downgrade() -> None:
     op.drop_index("ix_users_username", table_name="users")
     op.drop_table("users")
     op.drop_table("email_templates")
-    op.drop_column("call_logs", "recording_duration_seconds")
-    op.drop_column("call_logs", "recording_url")
     op.drop_column("candidates", "retain_until")
     op.drop_column("candidates", "anonymised")
     op.drop_column("candidates", "deletion_requested_at")

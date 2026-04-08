@@ -116,7 +116,12 @@ class CandidateOut(CandidateBase):
 
 
 class ProtocolEntry(BaseModel):
-    """Unified protocol / timeline entry (email, call, chat, note)."""
+    """Unified protocol / timeline entry (email, call, chat, note).
+
+    For ``kind == "call"`` the ``recording_url`` and ``duration_seconds``
+    fields are populated from the ``CallLog`` row so the UI can render
+    an inline HTML5 audio player without doing a second API roundtrip.
+    """
 
     kind: str  # email_inbound | email_outbound | call | chat | note
     title: str
@@ -125,3 +130,7 @@ class ProtocolEntry(BaseModel):
     direction: str | None = None
     created_at: datetime
     reference_id: int | None = None
+    # Call-specific extras (always None for non-call entries).
+    recording_url: str | None = None
+    duration_seconds: int | None = None
+    call_sid: str | None = None

@@ -21,7 +21,32 @@ const BASE_URL =
 export const http = axios.create({
   baseURL: BASE_URL,
   timeout: 60_000,
+  // Required so the browser sends the httpOnly session cookie on every
+  // cross-origin request. The backend's CORS config allows credentials;
+  // without this flag the cookie is silently dropped.
+  withCredentials: true,
 });
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+export type AuthUser = {
+  id: number;
+  username: string;
+  email: string | null;
+  full_name: string | null;
+  is_admin: boolean;
+  is_active: boolean;
+};
+
+export const auth = {
+  login: (username: string, password: string) =>
+    http
+      .post<AuthUser>("/api/auth/login", { username, password })
+      .then((r) => r.data),
+  logout: () => http.post("/api/auth/logout").then((r) => r.data),
+  me: () => http.get<AuthUser>("/api/auth/me").then((r) => r.data),
+};
 
 // ---------------------------------------------------------------------------
 // Dashboard
@@ -109,6 +134,14 @@ export const candidates = {
     http
       .post<Candidate>(`/api/candidates/${id}/consent`, null, { params: { source } })
       .then((r) => r.data),
+
+  importLinkedIn: (id: number, linkedin_url?: string) =>
+    http
+      .post<{ candidate: Candidate; updated_fields: string[] }>(
+        `/api/candidates/${id}/import-linkedin`,
+        linkedin_url ? { linkedin_url } : {}
+      )
+      .then((r) => r.data),
 };
 
 // ---------------------------------------------------------------------------
@@ -145,8 +178,12 @@ export const matches = {
 export const calls = {
   list: (params?: { candidate_id?: number; status?: string }) =>
     http.get<CallLog[]>("/api/calls/", { params }).then((r) => r.data),
+  get: (id: number) =>
+    http.get<CallLog>(`/api/calls/${id}`).then((r) => r.data),
   initiate: (body: { candidate_id: number; to_number?: string }) =>
     http.post<CallLog>("/api/calls/initiate", body).then((r) => r.data),
+  hangup: (id: number) =>
+    http.post<CallLog>(`/api/calls/${id}/hangup`).then((r) => r.data),
 };
 
 // ---------------------------------------------------------------------------
@@ -193,6 +230,147 @@ export const settings = {
 
 export type RuntimeConfig = {
   crm_required_fields: string[];
+};
+
+// ---------------------------------------------------------------------------
+// Email templates
+// ---------------------------------------------------------------------------
+export type EmailTemplate = {
+  id: number;
+  name: string;
+  language: string;
+  subject: string;
+  body: string;
+  is_signature: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export const templates = {
+  list: (language?: string) =>
+    http
+      .get<EmailTemplate[]>("/api/templates/", {
+        params: language ? { language } : undefined,
+      })
+      .then((r) => r.data),
+  get: (id: number) =>
+    http.get<EmailTemplate>(`/api/templates/${id}`).then((r) => r.data),
+  create: (body: {
+    name: string;
+    language: string;
+    subject: string;
+    body: string;
+    is_signature?: boolean;
+  }) =>
+    http.post<EmailTemplate>("/api/templates/", body).then((r) => r.data),
+  update: (id: number, body: Partial<EmailTemplate>) =>
+    http
+      .patch<EmailTemplate>(`/api/templates/${id}`, body)
+      .then((r) => r.data),
+  delete: (id: number) =>
+    http.delete(`/api/templates/${id}`).then((r) => r.data),
+  preview: (id: number) =>
+    http
+      .post<{ subject: string; body: string }>(`/api/templates/${id}/preview`)
+      .then((r) => r.data),
+};
+
+// ---------------------------------------------------------------------------
+// Reports
+// ---------------------------------------------------------------------------
+export type PipelineReport = {
+  stages: Record<string, number>;
+  total: number;
+};
+
+export type SourcesReport = {
+  sources: Record<string, number>;
+  total: number;
+};
+
+export type CallsReport = {
+  days: number;
+  total: number;
+  by_status: Record<string, number>;
+  by_direction: Record<string, number>;
+  answered_rate: number;
+};
+
+export type EmailsReport = {
+  days: number;
+  total: number;
+  by_direction: Record<string, number>;
+};
+
+export type TimeseriesReport = {
+  days: number;
+  total: number;
+  series: { date: string; count: number }[];
+};
+
+export type SummaryReport = {
+  days: number;
+  new_candidates: number;
+  new_matches: number;
+  placements: number;
+  open_jobs: number;
+  placement_rate: number;
+};
+
+export const reports = {
+  summary: (days = 30) =>
+    http
+      .get<SummaryReport>("/api/reports/summary", { params: { days } })
+      .then((r) => r.data),
+  pipeline: () =>
+    http.get<PipelineReport>("/api/reports/pipeline").then((r) => r.data),
+  sources: () =>
+    http.get<SourcesReport>("/api/reports/sources").then((r) => r.data),
+  calls: (days = 30) =>
+    http
+      .get<CallsReport>("/api/reports/calls", { params: { days } })
+      .then((r) => r.data),
+  emails: (days = 30) =>
+    http
+      .get<EmailsReport>("/api/reports/emails", { params: { days } })
+      .then((r) => r.data),
+  timeseries: (days = 30) =>
+    http
+      .get<TimeseriesReport>("/api/reports/timeseries", { params: { days } })
+      .then((r) => r.data),
+};
+
+// ---------------------------------------------------------------------------
+// Bulk actions
+// ---------------------------------------------------------------------------
+export type BulkEmailRequest = {
+  candidate_ids: number[];
+  template_id?: number;
+  subject?: string;
+  body?: string;
+};
+
+export type BulkEmailResult = {
+  sent: number;
+  failed: number;
+  errors: { candidate_id: number; reason: string }[];
+};
+
+export const bulk = {
+  exportCsv: (candidateIds: number[]) =>
+    http
+      .post("/api/candidates/bulk/export", { candidate_ids: candidateIds }, {
+        responseType: "blob",
+      })
+      .then((r) => r.data as Blob),
+  exportAllCsv: () =>
+    http
+      .get("/api/candidates/bulk/export", { responseType: "blob" })
+      .then((r) => r.data as Blob),
+  email: (req: BulkEmailRequest) =>
+    http
+      .post<BulkEmailResult>("/api/candidates/bulk/email", req)
+      .then((r) => r.data),
 };
 
 export const settingsApi = {

@@ -63,6 +63,54 @@ async def twilio_status_webhook(
     return {"ok": True}
 
 
+@router.post("/twilio/recording")
+async def twilio_recording_webhook(
+    CallSid: str = Form(...),
+    RecordingSid: str = Form(...),
+    RecordingUrl: str = Form(...),
+    RecordingDuration: str | None = Form(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Twilio posts here when it has finished encoding the recording.
+
+    We persist the fully-qualified recording URL (Twilio's ``RecordingUrl``
+    is a stable URL that supports ``.mp3`` / ``.wav`` suffixes) onto the
+    matching ``CallLog`` row so the protocol UI can stream it back via a
+    plain HTML5 ``<audio>`` element.
+
+    Authentication is handled out-of-band: the inbound-webhook secret is
+    validated at the reverse proxy for Twilio callbacks, matching how
+    the /status callback above is protected.
+    """
+    logger.info(
+        f"Twilio recording callback: call={CallSid} recording={RecordingSid} "
+        f"duration={RecordingDuration}s"
+    )
+    result = await db.execute(
+        select(CallLog).where(CallLog.twilio_call_sid == CallSid)
+    )
+    call = result.scalar_one_or_none()
+    if not call:
+        logger.warning(
+            f"Twilio recording callback for unknown CallSid={CallSid} — ignoring"
+        )
+        return {"ok": True, "found": False}
+
+    # Twilio returns a URL without a media extension; requesting it
+    # returns JSON. Append ``.mp3`` so the browser can play it directly
+    # as audio/mpeg from an <audio src="…">.
+    if RecordingUrl and not RecordingUrl.endswith((".mp3", ".wav")):
+        RecordingUrl = f"{RecordingUrl}.mp3"
+    call.recording_url = RecordingUrl
+    if RecordingDuration:
+        try:
+            call.duration_seconds = int(RecordingDuration)
+        except ValueError:
+            pass
+    await db.commit()
+    return {"ok": True}
+
+
 @router.websocket("/twilio/stream")
 async def twilio_media_stream(websocket: WebSocket):
     await websocket.accept()
