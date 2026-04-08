@@ -65,9 +65,12 @@ async def parse_cv_text(cv_text: str) -> dict[str, Any]:
 def _normalize(parsed: dict[str, Any]) -> dict[str, Any]:
     """Make sure expected keys exist and have correct types."""
     defaults: dict[str, Any] = {
+        "first_name": None,
+        "last_name": None,
         "full_name": None,
         "email": None,
         "phone": None,
+        "address": None,
         "location": None,
         "language": None,
         "headline": None,
@@ -84,6 +87,20 @@ def _normalize(parsed: dict[str, Any]) -> dict[str, Any]:
     for key, default in defaults.items():
         if key not in parsed or parsed[key] is None:
             parsed[key] = default
+
+    # Derive first/last from full_name if missing, and vice versa
+    if not parsed["full_name"] and (parsed["first_name"] or parsed["last_name"]):
+        parsed["full_name"] = (
+            f"{parsed['first_name'] or ''} {parsed['last_name'] or ''}".strip() or None
+        )
+    if parsed["full_name"] and not parsed["first_name"] and not parsed["last_name"]:
+        parts = parsed["full_name"].strip().split()
+        if len(parts) >= 2:
+            parsed["first_name"] = parts[0]
+            parsed["last_name"] = " ".join(parts[1:])
+        elif parts:
+            parsed["first_name"] = parts[0]
+
     return parsed
 
 

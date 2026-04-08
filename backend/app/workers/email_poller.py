@@ -1,4 +1,13 @@
-"""Periodic email poller worker."""
+"""Periodic email poller worker.
+
+Responsibility:
+- Pull unseen messages from IMAP / Graph API.
+- Extract attachments and parse CV text via Claude.
+- Upsert the candidate through the CRM layer (dedupe by email).
+- Append the message to the candidate protocol (EmailLog).
+- Trigger follow-up mail if required CRM fields are missing.
+- Kick off matching for brand-new candidates.
+"""
 
 from __future__ import annotations
 
@@ -9,9 +18,9 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.models.candidate import Candidate, CandidateSource, CandidateStatus
+from app.models.candidate import CandidateSource, CandidateStatus
 from app.models.email_log import EmailDirection, EmailKind, EmailLog
-from app.services import cv_parser
+from app.services import crm, cv_parser
 from app.services.email_service import IncomingEmail, get_email_service
 from app.services.followup_mail import send_followup_email
 from app.workers.match_processor import process_new_candidate
@@ -55,84 +64,77 @@ class EmailPoller:
                 if existing:
                     return
 
-            # Combine email body + attachment text for parsing
+            # Combine email body + attachment text for parsing. Keep track of
+            # the "primary" CV attachment bytes so we can persist the file and
+            # serve it back as a PDF preview.
             attachment_text = ""
+            cv_bytes: bytes | None = None
+            cv_filename: str | None = None
             for att in em.attachments:
-                attachment_text += "\n\n" + cv_parser.extract_text_from_attachment(
-                    att.filename, att.data
-                )
+                text = cv_parser.extract_text_from_attachment(att.filename, att.data)
+                if text:
+                    attachment_text += "\n\n" + text
+                    if cv_bytes is None:
+                        cv_bytes = att.data
+                        cv_filename = att.filename
+
             full_text = (em.body_plain or "") + attachment_text
-
             parsed = await cv_parser.parse_cv_text(full_text) if full_text.strip() else {}
-            missing = cv_parser.detect_missing_fields(parsed) if parsed else []
 
-            candidate = Candidate(
-                full_name=parsed.get("full_name") or em.from_name or em.from_address,
-                email=parsed.get("email") or em.from_address,
-                phone=parsed.get("phone"),
-                location=parsed.get("location"),
-                language=parsed.get("language"),
-                headline=parsed.get("headline"),
-                summary=parsed.get("summary"),
-                skills=parsed.get("skills"),
-                experience_years=parsed.get("experience_years"),
-                education=parsed.get("education"),
-                work_history=parsed.get("work_history"),
-                salary_expectation=parsed.get("salary_expectation"),
-                salary_currency=parsed.get("salary_currency"),
-                availability=parsed.get("availability"),
-                languages_spoken=parsed.get("languages_spoken"),
+            # Upsert via CRM (dedupe by email)
+            result = await crm.upsert_from_inbound(
+                db,
+                parsed=parsed or {},
+                cv_text=full_text if full_text.strip() else None,
+                cv_filename=cv_filename,
+                cv_bytes=cv_bytes,
                 source=CandidateSource.EMAIL,
                 source_reference=em.message_id or em.from_address,
-                cv_text=full_text[:200000] if full_text else None,
-                status=(
-                    CandidateStatus.INFO_REQUESTED
-                    if missing
-                    else CandidateStatus.PARSED
-                ),
-                missing_fields=missing or None,
+                fallback_email=em.from_address,
+                fallback_name=em.from_name or None,
             )
-            db.add(candidate)
+            candidate = result.candidate
 
-            log = EmailLog(
+            # Always append the inbound mail to the protocol
+            await crm.append_message(
+                db,
+                candidate=candidate,
                 direction=EmailDirection.INBOUND,
-                kind=EmailKind.APPLICATION,
-                message_id=em.message_id,
+                kind=EmailKind.APPLICATION if result.created else EmailKind.REPLY,
                 from_address=em.from_address,
                 to_address=em.to_address,
                 subject=em.subject,
-                body=em.body_plain[:50000] if em.body_plain else None,
+                body=em.body_plain,
+                message_id=em.message_id,
                 attachments_count=len(em.attachments),
             )
-            db.add(log)
             await db.commit()
             await db.refresh(candidate)
-            log.candidate_id = candidate.id
-            await db.commit()
 
-            # Auto follow-up for missing fields
+            # Auto follow-up for missing CRM required fields
             if (
-                missing
+                result.missing_required
                 and self.settings.match_auto_email_followup
                 and candidate.email
             ):
-                mail = await send_followup_email(candidate, missing)
+                mail = await send_followup_email(candidate, result.missing_required)
                 if mail:
-                    db.add(
-                        EmailLog(
-                            candidate_id=candidate.id,
-                            direction=EmailDirection.OUTBOUND,
-                            kind=EmailKind.FOLLOWUP_REQUEST,
-                            from_address=self.settings.email_from_address,
-                            to_address=candidate.email,
-                            subject=mail["subject"],
-                            body=mail["body"],
-                        )
+                    await crm.append_message(
+                        db,
+                        candidate=candidate,
+                        direction=EmailDirection.OUTBOUND,
+                        kind=EmailKind.FOLLOWUP_REQUEST,
+                        from_address=self.settings.email_from_address,
+                        to_address=candidate.email,
+                        subject=mail["subject"],
+                        body=mail["body"],
                     )
+                    candidate.status = CandidateStatus.INFO_REQUESTED
                     await db.commit()
 
-            # Run matching
-            try:
-                await process_new_candidate(db, candidate)
-            except Exception as exc:
-                logger.exception(f"Match processing failed: {exc}")
+            # Run matching for brand-new, complete candidates
+            if result.created and not result.missing_required:
+                try:
+                    await process_new_candidate(db, candidate)
+                except Exception as exc:
+                    logger.exception(f"Match processing failed: {exc}")

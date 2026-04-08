@@ -1,28 +1,28 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useApi } from "@/hooks/useApi";
-import { calls as callsApi, candidates, emails, matches } from "@/lib/api";
+import { calls as callsApi, candidates } from "@/lib/api";
+import Avatar from "./shared/Avatar";
 import StatusBadge from "./StatusBadge";
+import { useChatDock } from "./chat/ChatDockContext";
 
 export default function CandidateDetail() {
   const { id } = useParams();
   const candidateId = Number(id);
   const [callMessage, setCallMessage] = useState<string | null>(null);
+  const [showCv, setShowCv] = useState(false);
+  const { open: openChat } = useChatDock();
 
   const { data: candidate, loading } = useApi(
     () => candidates.get(candidateId),
     [candidateId]
   );
-  const { data: candMatches } = useApi(
-    () => matches.list({ candidate_id: candidateId }),
+  const { data: protocol } = useApi(
+    () => candidates.protocol(candidateId),
     [candidateId]
   );
-  const { data: candCalls } = useApi(
-    () => callsApi.list({ candidate_id: candidateId }),
-    [candidateId]
-  );
-  const { data: candEmails } = useApi(
-    () => emails.list({ candidate_id: candidateId }),
+  const { data: matchingJobs } = useApi(
+    () => candidates.matchingJobs(candidateId),
     [candidateId]
   );
 
@@ -30,169 +30,193 @@ export default function CandidateDetail() {
     setCallMessage(null);
     try {
       const result = await callsApi.initiate({ candidate_id: candidateId });
-      setCallMessage(`Call initiated (SID: ${result.twilio_call_sid})`);
+      setCallMessage(`Anruf initiiert (SID: ${result.twilio_call_sid})`);
     } catch (e: any) {
-      setCallMessage(`Failed: ${e?.response?.data?.detail || e.message}`);
+      setCallMessage(`Fehler: ${e?.response?.data?.detail || e.message}`);
     }
   };
 
   if (loading) return <div className="text-text-muted">Loading…</div>;
-  if (!candidate) return <div className="text-text-muted">Not found.</div>;
+  if (!candidate) return <div className="text-text-muted">Nicht gefunden.</div>;
+
+  const displayName =
+    candidate.full_name ||
+    [candidate.first_name, candidate.last_name].filter(Boolean).join(" ") ||
+    candidate.email ||
+    "—";
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-start justify-between">
-        <div>
-          <Link to="/candidates" className="label-mono hover:text-amber-accent">
-            ← Candidates
-          </Link>
-          <h1 className="font-display text-3xl font-semibold tracking-tight mt-2">
-            {candidate.full_name || "Unnamed candidate"}
+    <div className="max-w-5xl mx-auto space-y-8">
+      <Link to="/people" className="label-mono hover:text-amber-accent">
+        ← People
+      </Link>
+
+      <div className="flex flex-col md:flex-row items-start md:items-center gap-5 card p-6">
+        <Avatar name={displayName} src={candidate.photo_url} size={88} />
+        <div className="flex-1">
+          <h1 className="font-display text-3xl font-semibold tracking-tight">
+            {displayName}
           </h1>
-          <div className="flex items-center gap-3 mt-2 text-sm text-text-secondary">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-sm text-text-secondary">
             <span>{candidate.email || "—"}</span>
             <span>·</span>
             <span>{candidate.phone || "—"}</span>
             <span>·</span>
-            <span>{candidate.location || "—"}</span>
-            <span>·</span>
+            <span>{candidate.address || candidate.location || "—"}</span>
             <StatusBadge status={candidate.status} />
           </div>
+          {candidate.headline && (
+            <div className="text-sm text-text-muted mt-2">{candidate.headline}</div>
+          )}
         </div>
-        <div className="flex gap-2">
-          <button onClick={handleCall} className="btn-primary">
-            Call now
+        <div className="flex flex-col gap-2">
+          <button
+            onClick={() => openChat(candidateId, displayName, candidate.photo_url)}
+            className="btn-primary"
+          >
+            AI Chat
           </button>
+          <button onClick={handleCall} className="btn-secondary">
+            Anrufen
+          </button>
+          {candidate.has_cv && (
+            <button
+              onClick={() => setShowCv((v) => !v)}
+              className="btn-secondary"
+            >
+              {showCv ? "CV ausblenden" : "CV öffnen"}
+            </button>
+          )}
         </div>
       </div>
+
       {callMessage && (
         <div className="card p-4 text-sm text-text-secondary">{callMessage}</div>
       )}
 
+      {candidate.missing_fields && candidate.missing_fields.length > 0 && (
+        <div className="card p-4 border-amber-accent/30">
+          <div className="label-mono text-amber-accent">CRM-Pflichtfelder fehlen</div>
+          <div className="text-sm text-text-secondary mt-1">
+            {candidate.missing_fields.join(", ")}
+          </div>
+        </div>
+      )}
+
+      {showCv && candidate.has_cv && (
+        <section className="card p-0 overflow-hidden">
+          <iframe
+            src={candidates.cvUrl(candidateId)}
+            title={`CV ${displayName}`}
+            className="w-full"
+            style={{ height: "70vh", border: 0, background: "#1c1c23" }}
+          />
+        </section>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <section className="card p-6">
-            <h2 className="font-display text-lg font-semibold mb-3">Profile</h2>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <Field label="Headline" value={candidate.headline} />
-              <Field label="Experience" value={candidate.experience_years ? `${candidate.experience_years} y` : null} />
-              <Field
-                label="Salary expectation"
-                value={
-                  candidate.salary_expectation
-                    ? `${candidate.salary_expectation.toLocaleString("de-CH")} ${candidate.salary_currency || "CHF"}`
-                    : null
-                }
-              />
-              <Field label="Availability" value={candidate.availability} />
-              <Field label="Language" value={candidate.language} />
-              <Field
-                label="Languages spoken"
-                value={(candidate.languages_spoken ?? []).join(", ") || null}
-              />
-            </div>
-            <div className="mt-4">
+        <section className="lg:col-span-2 card p-6 space-y-4">
+          <h2 className="font-display text-lg font-semibold">Profil</h2>
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <Field label="Erfahrung" value={candidate.experience_years ? `${candidate.experience_years} J` : null} />
+            <Field
+              label="Gehaltswunsch"
+              value={
+                candidate.salary_expectation
+                  ? `${candidate.salary_expectation.toLocaleString("de-CH")} ${
+                      candidate.salary_currency || "CHF"
+                    }`
+                  : null
+              }
+            />
+            <Field label="Verfügbarkeit" value={candidate.availability} />
+            <Field label="Sprache" value={candidate.language} />
+            <Field
+              label="Gesprochene Sprachen"
+              value={(candidate.languages_spoken ?? []).join(", ") || null}
+            />
+            <Field label="Quelle" value={candidate.source} />
+          </div>
+          {candidate.skills && candidate.skills.length > 0 && (
+            <div>
               <div className="label-mono mb-2">Skills</div>
               <div className="flex flex-wrap gap-1">
-                {(candidate.skills ?? []).map((s) => (
+                {candidate.skills.map((s) => (
                   <span key={s} className="pill bg-bg-elevated text-text-secondary">
                     {s}
                   </span>
                 ))}
               </div>
             </div>
-            {candidate.summary && (
-              <div className="mt-4">
-                <div className="label-mono mb-2">Summary</div>
-                <p className="text-sm text-text-secondary leading-relaxed">
-                  {candidate.summary}
-                </p>
-              </div>
-            )}
-          </section>
-
-          <section className="card p-6">
-            <h2 className="font-display text-lg font-semibold mb-3">Match history</h2>
-            {(candMatches ?? []).length === 0 && (
-              <div className="text-text-muted text-sm">No matches yet.</div>
-            )}
-            <div className="space-y-2">
-              {(candMatches ?? []).map((m) => (
-                <div
-                  key={m.id}
-                  className="flex items-center justify-between p-3 bg-bg-elevated rounded-md"
-                >
-                  <div>
-                    <Link to={`/jobs/${m.job_id}`} className="font-medium hover:text-amber-accent">
-                      Job #{m.job_id}
-                    </Link>
-                    <div className="text-xs text-text-muted mt-0.5">{m.rationale}</div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono text-xl text-amber-accent">
-                      {m.score.toFixed(0)}%
-                    </span>
-                    <StatusBadge status={m.status} />
-                  </div>
-                </div>
-              ))}
+          )}
+          {candidate.summary && (
+            <div>
+              <div className="label-mono mb-2">Zusammenfassung</div>
+              <p className="text-sm text-text-secondary leading-relaxed">
+                {candidate.summary}
+              </p>
             </div>
-          </section>
+          )}
+        </section>
 
-          <section className="card p-6">
-            <h2 className="font-display text-lg font-semibold mb-3">Communication log</h2>
-            <div className="space-y-3">
-              {(candCalls ?? []).map((c) => (
-                <div key={`call-${c.id}`} className="p-3 bg-bg-elevated rounded-md">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-sm">CALL · {c.to_number}</span>
-                    <StatusBadge status={c.status} />
+        <section className="card p-6">
+          <h2 className="font-display text-lg font-semibold mb-3">Passende Stellen</h2>
+          {(matchingJobs ?? []).length === 0 && (
+            <div className="text-text-muted text-sm">Keine offenen Jobs gefunden.</div>
+          )}
+          <div className="space-y-2">
+            {(matchingJobs ?? []).map((mj) => (
+              <Link
+                key={mj.job.id}
+                to={`/jobs/${mj.job.id}`}
+                className="block p-3 bg-bg-elevated rounded-md hover:bg-bg-border transition-colors"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium truncate">{mj.job.title}</div>
+                    <div className="text-xs text-text-muted truncate">
+                      {mj.job.company || "—"}
+                    </div>
                   </div>
-                  {c.summary && (
-                    <p className="text-sm text-text-secondary mt-2">{c.summary}</p>
-                  )}
+                  <span className="font-mono text-amber-accent text-sm">
+                    {mj.match.score.toFixed(0)}%
+                  </span>
                 </div>
-              ))}
-              {(candEmails ?? []).map((e) => (
-                <div key={`mail-${e.id}`} className="p-3 bg-bg-elevated rounded-md">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-sm uppercase">{e.direction} · {e.kind}</span>
-                    <span className="label-mono">
-                      {new Date(e.created_at).toLocaleString("de-CH")}
-                    </span>
-                  </div>
-                  <div className="text-sm font-medium mt-1">{e.subject || "(no subject)"}</div>
-                  {e.body && (
-                    <p className="text-xs text-text-secondary mt-1 line-clamp-3">{e.body}</p>
-                  )}
-                </div>
-              ))}
-              {(candCalls ?? []).length === 0 && (candEmails ?? []).length === 0 && (
-                <div className="text-text-muted text-sm">No communication yet.</div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <section className="card p-6">
+        <h2 className="font-display text-lg font-semibold mb-3">Protokoll</h2>
+        {(protocol?.length ?? 0) === 0 && (
+          <div className="text-text-muted text-sm">Noch keine Kommunikation.</div>
+        )}
+        <div className="space-y-2">
+          {(protocol ?? []).map((p) => (
+            <div
+              key={`${p.kind}-${p.reference_id}-${p.created_at}`}
+              className="p-3 bg-bg-elevated rounded-md"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-mono text-xs uppercase text-text-muted">
+                  {p.kind} {p.status ? `· ${p.status}` : ""}
+                </span>
+                <span className="label-mono">
+                  {new Date(p.created_at).toLocaleString("de-CH")}
+                </span>
+              </div>
+              <div className="text-sm font-medium mt-1">{p.title}</div>
+              {p.body && (
+                <p className="text-xs text-text-secondary mt-1 line-clamp-3 whitespace-pre-line">
+                  {p.body}
+                </p>
               )}
             </div>
-          </section>
+          ))}
         </div>
-
-        <div className="space-y-6">
-          {candidate.missing_fields && candidate.missing_fields.length > 0 && (
-            <section className="card p-6 border-amber-accent/30">
-              <h2 className="font-display text-lg font-semibold mb-2 text-amber-accent">
-                Missing info
-              </h2>
-              <ul className="text-sm text-text-secondary space-y-1">
-                {candidate.missing_fields.map((f) => (
-                  <li key={f}>· {f}</li>
-                ))}
-              </ul>
-            </section>
-          )}
-          <section className="card p-6">
-            <h2 className="font-display text-lg font-semibold mb-2">Source</h2>
-            <div className="text-sm text-text-secondary">{candidate.source}</div>
-          </section>
-        </div>
-      </div>
+      </section>
     </div>
   );
 }

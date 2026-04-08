@@ -12,10 +12,12 @@ from loguru import logger
 from app.api import (
     calls,
     candidates,
+    chat,
     dashboard,
     emails,
     jobs,
     matches,
+    messages,
     settings as settings_api,
     webhooks,
 )
@@ -85,6 +87,8 @@ app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
 app.include_router(matches.router, prefix="/api/matches", tags=["matches"])
 app.include_router(calls.router, prefix="/api/calls", tags=["calls"])
 app.include_router(emails.router, prefix="/api/emails", tags=["emails"])
+app.include_router(messages.router, prefix="/api/messages", tags=["messages"])
+app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])
 

@@ -65,11 +65,14 @@ export default function Dashboard() {
         <div className="card p-6">
           <h2 className="font-display text-lg font-semibold mb-4">Quick actions</h2>
           <div className="space-y-3">
-            <Link to="/candidates" className="btn-secondary w-full">
-              Browse candidates
+            <Link to="/people" className="btn-secondary w-full">
+              Browse people
             </Link>
             <Link to="/jobs" className="btn-secondary w-full">
               Browse jobs
+            </Link>
+            <Link to="/messages" className="btn-secondary w-full">
+              Messages
             </Link>
             <Link to="/matches" className="btn-secondary w-full">
               Open match board

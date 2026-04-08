@@ -1,27 +1,70 @@
-# RecruiterAI
+# RecruiterAI — Personal-Vermittler Cockpit
 
-**AI Recruiting Telephone Agent für Schweizer Personalvermittlungen.**
+**AI-gestütztes CRM- und Voice-Cockpit für Schweizer Personalvermittlungen.**
 
-RecruiterAI empfängt Bewerbungen per E-Mail (und optional via LinkedIn oder einer
-externen REST-API), parst CVs mit Claude, matched Kandidaten gegen offene Stellen,
-führt automatische bilingue (DE/EN) Telefonate über Twilio + Deepgram +
-ElevenLabs und liefert dem Recruiter strukturierte Zusammenfassungen.
+RecruiterAI ist ein CRM-System mit integriertem Voice-Agent und pro-Kandidat
+AI-Chat. Jede eingehende Bewerbung (per E-Mail, LinkedIn oder externer
+REST-API) wird automatisch gegen die PostgreSQL-Datenbank abgeglichen — gibt
+es noch kein Profil mit dieser Mail-Adresse, wird eines angelegt; andernfalls
+landet die Nachricht als Eintrag im Protokoll des bestehenden Profils. Fehlen
+Pflichtfelder (Vorname, Nachname, E-Mail, Telefon), fragt die Applikation den
+Kandidaten per Follow-up-Mail danach und erstellt das Profil erst, wenn die
+Daten vollständig sind.
+
+Der Personal-Vermittler arbeitet in einer minimalen 3-Tab-Oberfläche
+(**People · Messages · Jobs**) und kann pro Kandidat ein **AI-Chat-Fenster**
+öffnen: Claude kennt den CV + das komplette Protokoll und kann per
+Werkzeug-Aufruf Mails verschicken oder Telefonanrufe auslösen. Es können
+mehrere Mini-Chats (bis zu 5, abhängig von der Bildschirmgrösse) gleichzeitig
+geöffnet und einzeln minimiert werden — wie bei einem Messenger-Dock.
 
 ---
 
 ## Features
 
-- **Multi-Source Ingestion** — Email (IMAP / Microsoft Graph), LinkedIn,
-  generische REST-API. Sources sind einzeln über `.env` an-/abschaltbar.
-- **CV Parsing** mit Claude — extrahiert Skills, Erfahrung, Verfügbarkeit usw.
-- **Automatische Follow-Up Mails** wenn Pflichtfelder fehlen.
-- **Matching Engine** — heuristische Skill/Experience/Location/Salary/Availability
-  Scores plus optional semantisches Matching durch Claude.
-- **Voice Agent** — outbound Twilio-Anrufe, bidirektionaler Media Stream,
-  Deepgram STT mit automatischer Sprachenerkennung, ElevenLabs TTS,
-  Claude als Konversations-LLM, Post-Call Summary.
-- **Recruiter Notifications** per Mail bei Matches und nach jedem Anruf.
-- **React Dashboard** im "Swiss Precision"-Stil (dunkler Bloomberg/Linear-Hybrid).
+### CRM-Kern (neu)
+- **CRM Upsert on intake** — jede Mail/Nachricht wird per E-Mail-Adresse
+  dedupliziert. Bestehende Profile werden in place aktualisiert, die
+  Kommunikations-Historie (Protokoll) bleibt intakt.
+- **NOT-NULL Pflichtfelder** (`CRM_REQUIRED_FIELDS`) — fehlt etwas, sendet die
+  App automatisch eine Follow-up Mail und hält den Kandidaten im Status
+  `info_requested` bis der CV vollständig ist.
+- **Vereinigtes Protokoll** pro Kandidat: eingehende/ausgehende Mails, Anrufe
+  und AI-Chat als Timeline (`GET /api/candidates/{id}/protocol`).
+- **CV-Speicher** — der Original-CV wird als Datei persistiert und kann im
+  UI direkt im PDF-Viewer geöffnet werden
+  (`GET /api/candidates/{id}/cv`).
+- **External Webhook** für Messages aus einer bestehenden Webapp
+  (`POST /api/messages/inbound`).
+
+### AI-Chat pro Kandidat (neu)
+- Per-Kandidat Chat mit Claude: System-Prompt enthält CV + Protokoll, damit
+  der Bot kontextbezogen antworten kann.
+- **Tool-Aufrufe** aus dem Chat: `send_email(subject, body)` oder
+  `initiate_call(reason)`. Der Recruiter gibt eine Anweisung in
+  Umgangssprache, die App führt sie aus und loggt den Aufruf ins Protokoll.
+- **Mini-Chat-Dock** unten rechts: bis zu 5 Kandidaten parallel, einzeln
+  minimierbar.
+
+### Matching & Voice (aus dem Original übernommen)
+- Heuristisches Matching (Skills, Erfahrung, Ort, Salary, Verfügbarkeit)
+  plus optionaler semantischer Pass durch Claude.
+- Voice-Agent: Twilio Outbound Call → WebSocket Media Stream →
+  Deepgram STT → Claude Konversation → ElevenLabs TTS. DE/EN automatisch.
+- Post-Call Summary per Claude, Mail an Recruiter.
+
+### UI
+- Minimaler 3-Tab-Header (People · Messages · Jobs) + "More"-Dropdown
+  für Overview/Matches/Calls/Emails/Settings.
+- **People-Tab**: einzige Suchleiste matched auf Name, Mail, Telefon,
+  Adresse. Grid mit Avatar, Name, Kontakt & Status, sortierbar nach
+  zuletzt aktualisiert oder Nachname A–Z.
+- **Messages-Tab**: eingehende Nachrichten (Mails und Webhook-Events)
+  mit Lesen-Toggle.
+- **Jobs-Tab**: Suche nach Titel / Firma / Ort / Beschreibung; Detailseite
+  zeigt das Ranking passender Kandidaten per Knopfdruck.
+- **Candidate-Detail**: Foto, alle Daten, CV als PDF im iframe, Liste
+  passender offener Stellen, vollständiges Protokoll, AI-Chat-Button.
 
 ---
 
@@ -31,24 +74,37 @@ ElevenLabs und liefert dem Recruiter strukturierte Zusammenfassungen.
 recruiter-ai/
 ├── backend/                FastAPI + async SQLAlchemy + Alembic
 │   └── app/
-│       ├── api/            REST endpoints
-│       ├── models/         SQLAlchemy ORM
+│       ├── api/            REST endpoints (inkl. chat, messages)
+│       ├── models/         ORM — jetzt mit chat_messages
 │       ├── schemas/        Pydantic schemas
-│       ├── services/       Business logic (Claude, Twilio, ElevenLabs, ...)
-│       ├── workers/        Background pollers (Email, LinkedIn, Matching)
-│       ├── utils/          Claude prompt templates
-│       ├── config.py       Pydantic settings (source-aware validation)
-│       ├── database.py     Async engine + session
-│       └── main.py         FastAPI entrypoint
+│       ├── services/       Business logic
+│       │   ├── crm.py           CRM upsert + CV storage
+│       │   ├── cv_parser.py     Claude CV parser
+│       │   ├── matching_engine  Heuristik + Semantik (Claude)
+│       │   ├── voice_agent.py   Twilio + Deepgram + ElevenLabs
+│       │   └── ...
+│       ├── workers/        Background poller (Email, LinkedIn, Matching)
+│       ├── utils/          Prompt templates (inkl. chat system prompt)
+│       └── main.py
 ├── frontend/               React + Vite + TypeScript + Tailwind
 │   └── src/
-│       ├── components/     Layout, Dashboard, lists, board, players, ...
+│       ├── components/
+│       │   ├── Layout.tsx          3-Tab Header + dropdown
+│       │   ├── PeopleTab.tsx       Suche + Kandidaten-Grid
+│       │   ├── MessagesTab.tsx     Neue Nachrichten
+│       │   ├── JobsTab.tsx         Jobs suchen
+│       │   ├── CandidateDetail.tsx Profil + CV PDF + Matches + Protokoll
+│       │   ├── JobDetail.tsx       Description + Ranking-Button
+│       │   ├── chat/
+│       │   │   ├── ChatDockContext.tsx  Fenster-State + max visible
+│       │   │   ├── ChatDock.tsx         Fixed-bottom Dock
+│       │   │   └── ChatWindow.tsx       Per-Kandidat Mini-Chat
+│       │   └── shared/Avatar.tsx
 │       ├── hooks/          useApi, useDashboardStats
-│       ├── lib/api.ts      Axios client
+│       ├── lib/api.ts      Axios client (alle Endpoints)
 │       └── types/          Shared TypeScript types
-├── docker-compose.yml      Postgres + backend + frontend
-├── Makefile                up / down / fresh / db-* / shell-*
-└── .env.example            Vollständig dokumentierte Konfiguration
+├── docker-compose.yml      Postgres + backend + frontend + cv_storage volume
+└── .env.example
 ```
 
 ---
@@ -56,97 +112,93 @@ recruiter-ai/
 ## Quickstart
 
 ```bash
-# 1. Konfiguration
 cp .env.example .env
-# Trage mindestens diese Werte ein:
-#   POSTGRES_PASSWORD
-#   ANTHROPIC_API_KEY
-#   EMAIL_IMAP_HOST + USER + PASSWORD  (falls SOURCE_EMAIL_ENABLED=true)
-#   TWILIO_*  (für Anrufe)
-#   ELEVENLABS_API_KEY + VOICE_IDs
-#   DEEPGRAM_API_KEY
+# Pflicht:  POSTGRES_PASSWORD, ANTHROPIC_API_KEY
+# Optional: EMAIL_IMAP_*, SMTP, TWILIO_*, ELEVENLABS_*, DEEPGRAM_*
 
-# 2. Start
 make up
-
-# 3. Datenbank-Migrationen
 make db-upgrade
-
-# 4. Logs anschauen
-make logs
-
-# 5. UI öffnen
 open http://localhost:3000
-# Backend Docs: http://localhost:8000/docs
 ```
 
-### Häufige Make-Commands
-
-| Command            | Was es tut                                              |
-|--------------------|---------------------------------------------------------|
-| `make up`          | Alle Services starten                                   |
-| `make down`        | Stoppen, Volumes bleiben                                |
-| `make down-clean`  | Stoppen UND Volumes löschen (DB wird gelöscht!)         |
-| `make restart`     | Stop + Rebuild + Start                                  |
-| `make reload`      | Schneller Neustart der Container ohne Rebuild           |
-| `make fresh`       | Komplett neu: Volumes + Rebuild + Migrate               |
-| `make logs`        | Logs aller Services                                     |
-| `make logs-backend`| Nur Backend-Logs                                        |
-| `make db-upgrade`  | Alembic Migrations laufen lassen                        |
-| `make db-migrate MSG="..."` | Neue Migration generieren                       |
-| `make db-shell`    | psql in der Postgres                                    |
-| `make shell-backend` | Bash im Backend Container                             |
+Nach dem Start öffnet sich direkt der **People**-Tab. CVs, die per Mail
+einlaufen, werden automatisch von `EmailPoller` abgeholt, per Claude
+geparst und via `crm.upsert_from_inbound` deduplex angelegt oder
+aktualisiert.
 
 ---
 
-## Konfiguration über `.env`
+## CRM-Lifecycle
 
-Alle Settings stammen aus einer einzigen `.env`-Datei. Sources werden über
-`SOURCE_*_ENABLED` Flags an- und abgeschaltet:
+```
+┌───────────────┐   CV / Mail   ┌────────────────────┐
+│ Inbound event │──────────────▶│ cv_parser (Claude) │
+└───────────────┘               └──────────┬─────────┘
+                                           │ parsed JSON
+                                           ▼
+                           ┌────────────────────────────────┐
+                           │ crm.upsert_from_inbound(db, …) │
+                           │  • lookup by email             │
+                           │  • merge into existing profile │
+                           │  • or create new if required   │
+                           │    fields are present          │
+                           └──────┬─────────────────────────┘
+                                  │
+              ┌───────────────────┼────────────────────────┐
+              ▼                   ▼                        ▼
+    ┌─────────────────┐  ┌────────────────┐  ┌───────────────────────┐
+    │ append_message  │  │ follow-up mail │  │ match_processor       │
+    │ (EmailLog row)  │  │ (missing info) │  │ (only if profile new  │
+    └─────────────────┘  └────────────────┘  │  AND complete)        │
+                                             └───────────────────────┘
+```
+
+Die Konfiguration der NOT-NULL Felder passiert in `.env`:
 
 ```env
-SOURCE_EMAIL_ENABLED=true
-SOURCE_LINKEDIN_ENABLED=false
-SOURCE_EXTERNAL_API_ENABLED=false
+CRM_REQUIRED_FIELDS=first_name,last_name,email,phone
 ```
-
-**Wichtig:** Wenn eine Source deaktiviert ist, werden ihre zugehörigen Felder
-auch nicht validiert — du kannst sie leer lassen. Wenn du sie aktivierst,
-verlangt `Settings` beim Start die nötigen Pflichtfelder (siehe
-`backend/app/config.py`).
-
-Die generische REST-API ist mit jeder Kunden-Anwendung kompatibel: Auth-Methode
-und alle Endpoint-Pfade sind über `.env` konfigurierbar
-(`EXTERNAL_API_AUTH_TYPE`, `EXTERNAL_API_CANDIDATES_GET`, ...).
 
 ---
 
-## Voice Agent Flow
+## AI-Chat pro Kandidat
 
-```
-1. Trigger:
-   POST /api/calls/initiate { candidate_id, match_id? }
-   → Twilio dialed candidate from configured number
+### System-Prompt
+Für jede Session baut `app/api/chat.py` den System-Prompt aus:
+- **Kandidatenprofil** (JSON)
+- **Kurzprotokoll** (letzte 10 Mails + 5 Anrufe)
+- **Tool-Spec**: `send_email` und `initiate_call`
 
-2. On call connect Twilio fetches TwiML from:
-   POST /api/webhooks/twilio/voice
-   → Returns <Connect><Stream url="wss://.../api/webhooks/twilio/stream">
+Der Recruiter sagt im Chatfenster z.B. *"Schreib ihm eine kurze Mail und
+frag nach seiner Gehaltsvorstellung"*. Claude antwortet mit einem JSON
+Objekt:
 
-3. Twilio opens a WebSocket Media Stream with the backend.
-   For each ~2s of caller audio:
-     - Deepgram STT (with auto language detection DE/EN)
-     - Claude generates a contextual reply (system prompt = job + candidate + agent identity)
-     - ElevenLabs TTS (DE or EN voice depending on detected language)
-     - Audio is streamed back into the Twilio Media Stream
-
-4. After hangup, status callback hits:
-   POST /api/webhooks/twilio/status
-   → Call log status updated, Claude generates a recruiter summary,
-     recruiter is notified by mail.
+```json
+{
+  "action": "send_email",
+  "args": {"subject": "...", "body": "..."},
+  "message": "Mail vorbereitet, sende jetzt."
+}
 ```
 
-Der erste Satz des Agenten ist bilingue. Sobald die Sprache des Kandidaten
-erkannt ist, wechselt die Konversation komplett in DE oder EN.
+Das Backend führt die Aktion aus, schreibt einen Protokoll-Eintrag und
+gibt den gesamten Chat-Verlauf zurück.
+
+### REST Endpoints
+
+| Route                               | Beschreibung                                 |
+|-------------------------------------|----------------------------------------------|
+| `GET  /api/chat/{candidate_id}`     | Chat-History (ohne system / tool intern)     |
+| `POST /api/chat/{candidate_id}`     | Neue Nachricht, führt tool automatisch aus   |
+
+### UI — Mini-Chat-Dock
+- Klick auf "AI Chat" in People-Tab oder Candidate-Detail öffnet ein
+  Chat-Fenster.
+- Es können so viele Fenster parallel offen sein, wie auf den Bildschirm
+  passen (min 1, max 5 — `computeMaxVisible` in
+  `ChatDockContext.tsx`).
+- Jedes Fenster hat oben ein Mail- und ein Anruf-Icon für manuelle
+  Actions und kann über die Titelleiste minimiert werden.
 
 ---
 
@@ -162,67 +214,42 @@ Matches werden in `app/services/matching_engine.py` berechnet. Dimensionen:
 | Gehalt             |    15 % |
 | Verfügbarkeit      |    10 % |
 
-`MATCH_THRESHOLD_PERCENT` (default 80) bestimmt, ab welchem Score der Worker
-automatisch Recruiter benachrichtigt und (wenn `MATCH_AUTO_CALL_ENABLED=true`)
-einen Anruf auslöst. Wenn `ANTHROPIC_API_KEY` gesetzt ist, läuft zusätzlich
-ein semantischer Pass durch Claude — z.B. erkennt er, dass "Spring Boot" zu
-"Java Backend" passt.
+Neue Endpoints für's Ranking direkt aus der UI:
+
+- `GET /api/jobs/{id}/candidates` — Kandidaten ranked für einen Job
+- `GET /api/candidates/{id}/matching-jobs` — Jobs ranked für einen Kandidaten
 
 ---
 
-## API Übersicht
+## API-Übersicht (Auszug der neuen Routen)
 
-| Route                                | Beschreibung                          |
-|--------------------------------------|---------------------------------------|
-| `GET  /api/dashboard/stats`          | KPIs für Dashboard                    |
-| `GET  /api/dashboard/activity`       | Activity feed                         |
-| `GET  /api/candidates/`              | Liste der Kandidaten (`status`, `q`)  |
-| `POST /api/candidates/`              | Kandidat manuell erstellen            |
-| `PATCH /api/candidates/{id}`         | Kandidat updaten                      |
-| `GET  /api/jobs/`                    | Liste der Jobs                        |
-| `POST /api/jobs/`                    | Job erstellen                         |
-| `GET  /api/matches/`                 | Matches mit Filtern                   |
-| `POST /api/matches/score/{c}/{j}`   | Score ad-hoc berechnen + Match anlegen|
-| `GET  /api/calls/`                   | Call logs                             |
-| `POST /api/calls/initiate`           | Anruf auslösen                        |
-| `GET  /api/emails/`                  | Email-Log                             |
-| `GET  /api/settings/`                | Read-only Konfigurations-Übersicht    |
-| `POST /api/webhooks/twilio/voice`    | TwiML für Twilio Voice                |
-| `POST /api/webhooks/twilio/status`   | Status-Callback                       |
-| `WS   /api/webhooks/twilio/stream`   | Media Stream                          |
+| Route                                       | Beschreibung                         |
+|---------------------------------------------|--------------------------------------|
+| `GET  /api/candidates/`                     | Suche (name/email/phone/address)     |
+| `POST /api/candidates/upload-cv`            | Manueller CV-Upload (läuft durch CRM)|
+| `GET  /api/candidates/{id}/cv`              | CV-Datei streamen (PDF)              |
+| `GET  /api/candidates/{id}/protocol`        | Vereinigtes Timeline                 |
+| `GET  /api/candidates/{id}/matching-jobs`   | Job-Ranking für Kandidat             |
+| `GET  /api/jobs/{id}/candidates`            | Kandidaten-Ranking für Job           |
+| `GET  /api/messages/`                       | Neue Nachrichten (messages tab)      |
+| `POST /api/messages/inbound`                | Webhook für externe Messages         |
+| `POST /api/messages/{id}/read`              | Gelesen/ungelesen togglen            |
+| `GET  /api/chat/{candidate_id}`             | AI-Chat History                      |
+| `POST /api/chat/{candidate_id}`             | Nachricht senden + Tool execution    |
 
-OpenAPI-Docs sind automatisch verfügbar unter
-[`http://localhost:8000/docs`](http://localhost:8000/docs).
-
----
-
-## Entwicklung
-
-Backend nutzt **uv** (Astral) zum Verwalten der Python Dependencies. Im Container:
-
-```bash
-make shell-backend
-uv sync
-uv run uvicorn app.main:app --reload
-```
-
-Frontend ist eine reine Vite-App:
-
-```bash
-make shell-frontend
-npm run dev
-```
+OpenAPI docs: `http://localhost:8000/docs`
 
 ---
 
 ## Sicherheits-Hinweise
 
-- `.env` enthält Secrets — niemals committen (`.gitignore` schließt sie aus).
-- Twilio Webhook-URLs müssen öffentlich erreichbar sein (z.B. via ngrok während
-  der Entwicklung). `TWILIO_WEBHOOK_BASE_URL` entsprechend setzen.
-- Alle ausgehenden API Calls (Claude, Deepgram, ElevenLabs, LinkedIn, Twilio,
-  externe REST-API) laufen in `try/except` mit strukturiertem Logging via
-  `loguru`.
+- `.env` enthält Secrets — niemals committen.
+- Twilio Webhook-URLs müssen öffentlich erreichbar sein (z.B. ngrok).
+- Chat-Tool-Ausführung läuft nur, wenn `auto_execute_tools=true` im Request —
+  die Frontend-UI setzt das per default. Für einen Dry-Run-Modus kann es
+  abgeschaltet werden.
+- Alle ausgehenden API-Calls (Claude, Deepgram, ElevenLabs, Twilio, …) laufen
+  in try/except mit strukturiertem Logging via `loguru`.
 
 ---
 

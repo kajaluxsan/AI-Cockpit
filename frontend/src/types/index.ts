@@ -12,11 +12,15 @@ export type CandidateSource = "email" | "linkedin" | "external_api" | "manual";
 
 export interface Candidate {
   id: number;
+  first_name: string | null;
+  last_name: string | null;
   full_name: string | null;
   email: string | null;
   phone: string | null;
+  address: string | null;
   location: string | null;
   language: string | null;
+  photo_url: string | null;
   headline: string | null;
   summary: string | null;
   skills: string[] | null;
@@ -28,8 +32,11 @@ export interface Candidate {
   source: CandidateSource;
   status: CandidateStatus;
   missing_fields: string[] | null;
+  cv_filename: string | null;
+  has_cv: boolean;
   created_at: string;
   updated_at: string;
+  notes?: string | null;
 }
 
 export type JobStatus = "open" | "paused" | "filled" | "closed";
@@ -115,6 +122,46 @@ export interface EmailLog {
   created_at: string;
 }
 
+export interface Message {
+  id: number;
+  candidate_id: number | null;
+  candidate_name: string | null;
+  candidate_photo_url: string | null;
+  direction: "inbound" | "outbound";
+  kind: "application" | "followup_request" | "reply" | "notification" | "other";
+  from_address: string | null;
+  to_address: string | null;
+  subject: string | null;
+  body: string | null;
+  answered: boolean;
+  created_at: string;
+}
+
+export interface ProtocolEntry {
+  kind:
+    | "email_inbound"
+    | "email_outbound"
+    | "call"
+    | "chat"
+    | "note";
+  title: string;
+  body: string | null;
+  status: string | null;
+  direction: string | null;
+  created_at: string;
+  reference_id: number | null;
+}
+
+export interface ChatMessage {
+  id: number;
+  candidate_id: number;
+  role: "user" | "assistant" | "tool" | "system";
+  content: string;
+  tool_name: string | null;
+  tool_payload: Record<string, unknown> | null;
+  created_at: string;
+}
+
 export interface DashboardStats {
   new_candidates_today: number;
   open_jobs: number;
@@ -149,4 +196,22 @@ export interface AppSettings {
   deepgram: { configured: boolean; model: string; language_detect: boolean };
   anthropic: { configured: boolean; model: string };
   external_api: { base_url: string | null; auth_type: string };
+}
+
+export interface MatchResult {
+  score: number;
+  breakdown: Record<string, number>;
+  rationale: string;
+  matched_skills: string[];
+  missing_skills: string[];
+}
+
+export interface MatchingJob {
+  job: Pick<Job, "id" | "title" | "company" | "location">;
+  match: MatchResult;
+}
+
+export interface MatchingCandidate {
+  candidate: Candidate;
+  match: MatchResult;
 }

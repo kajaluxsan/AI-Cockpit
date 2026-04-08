@@ -141,6 +141,13 @@ class Settings(BaseSettings):
     match_threshold_percent: int = 80
     match_auto_call_enabled: bool = True
     match_auto_email_followup: bool = True
+    # These fields are treated as the CRM "required" / NOT NULL set: if any of
+    # them is missing after CV parsing, the candidate profile is not created
+    # outright — instead a follow-up mail is sent asking for the missing info.
+    # Once the reply arrives, the profile is created.
+    crm_required_fields: str = (
+        "first_name,last_name,email,phone"
+    )
     match_missing_info_fields: str = (
         "skills,experience_years,salary_expectation,availability,location"
     )
@@ -186,6 +193,10 @@ class Settings(BaseSettings):
     @property
     def missing_info_field_list(self) -> list[str]:
         return [f.strip() for f in self.match_missing_info_fields.split(",") if f.strip()]
+
+    @property
+    def crm_required_field_list(self) -> list[str]:
+        return [f.strip() for f in self.crm_required_fields.split(",") if f.strip()]
 
     # ===============================================================
     # Source-aware validation
