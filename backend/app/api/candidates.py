@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from app.schemas.candidate import (
 )
 from app.services import crm, cv_parser
 from app.services.matching_engine import find_matches_for_candidate, to_dict
+from app.services.photo_extractor import PHOTO_STORAGE_DIR, extract_photo
 
 router = APIRouter()
 
@@ -143,6 +145,102 @@ async def delete_candidate(candidate_id: int, db: AsyncSession = Depends(get_db)
         raise HTTPException(status_code=404, detail="Candidate not found")
     await db.delete(candidate)
     await db.commit()
+
+
+@router.get("/{candidate_id}/photo")
+async def get_photo(candidate_id: int, db: AsyncSession = Depends(get_db)):
+    """Stream the candidate profile photo from local storage."""
+    candidate = (
+        await db.execute(select(Candidate).where(Candidate.id == candidate_id))
+    ).scalar_one_or_none()
+    if not candidate or not candidate.photo_url:
+        raise HTTPException(status_code=404, detail="No photo for this candidate")
+    path = Path(candidate.photo_url)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Photo file missing on disk")
+    suffix = path.suffix.lower().lstrip(".")
+    media = {
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "gif": "image/gif",
+        "webp": "image/webp",
+    }.get(suffix, "application/octet-stream")
+    return FileResponse(path, media_type=media)
+
+
+@router.post("/{candidate_id}/photo", response_model=CandidateOut)
+async def upload_photo(
+    candidate_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually upload a profile photo for a candidate.
+
+    Used by recruiters when CV photo extraction missed or there is no CV
+    attached. Replaces any existing photo.
+    """
+    candidate = (
+        await db.execute(select(Candidate).where(Candidate.id == candidate_id))
+    ).scalar_one_or_none()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    content_type = (file.content_type or "").lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty image upload")
+
+    try:
+        PHOTO_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Storage unavailable: {exc}")
+    ext = Path(file.filename or "").suffix.lower() or ".jpg"
+    if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp"):
+        ext = ".jpg"
+    target = PHOTO_STORAGE_DIR / f"{uuid.uuid4().hex}{ext}"
+    target.write_bytes(data)
+
+    # Best-effort cleanup of the previous photo
+    if candidate.photo_url:
+        try:
+            old = Path(candidate.photo_url)
+            if old.exists() and old.is_relative_to(PHOTO_STORAGE_DIR):
+                old.unlink()
+        except Exception:
+            pass
+
+    candidate.photo_url = str(target)
+    await db.commit()
+    await db.refresh(candidate)
+    return _serialize(candidate)
+
+
+@router.post("/{candidate_id}/extract-photo", response_model=CandidateOut)
+async def reextract_photo(
+    candidate_id: int, db: AsyncSession = Depends(get_db)
+):
+    """Re-run photo extraction on the stored CV. Useful after the heuristic
+    has been tuned, or if the original ingest missed the photo."""
+    candidate = (
+        await db.execute(select(Candidate).where(Candidate.id == candidate_id))
+    ).scalar_one_or_none()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    if not candidate.cv_attachment_path:
+        raise HTTPException(status_code=400, detail="No CV stored for candidate")
+    path = Path(candidate.cv_attachment_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="CV file missing on disk")
+    photo_path = extract_photo(candidate.cv_filename or path.name, path.read_bytes())
+    if not photo_path:
+        raise HTTPException(status_code=404, detail="No photo found in CV")
+    candidate.photo_url = photo_path
+    await db.commit()
+    await db.refresh(candidate)
+    return _serialize(candidate)
 
 
 @router.get("/{candidate_id}/cv")

@@ -316,10 +316,12 @@ async def _execute_initiate_call(
 ) -> str:
     if not candidate.phone:
         return "Fehlgeschlagen: Kandidat hat keine Telefonnummer."
+    reason = (args.get("reason") or "").strip()
     try:
         info = twilio_initiate_call(
             to_number=candidate.phone,
             candidate_id=candidate.id,
+            objective=reason or None,
         )
     except Exception as exc:
         return f"Fehlgeschlagen: Twilio-Fehler: {exc}"
@@ -330,7 +332,10 @@ async def _execute_initiate_call(
         from_number=info.get("from"),
         to_number=info.get("to"),
         status=CallStatus.INITIATED,
+        # Persist what the recruiter (via the AI chat) actually wanted to ask
+        # — surfaces in the call protocol so the recruiter can verify the AI
+        # raised the right topics on the call.
+        summary=(f"Auftrag aus AI-Chat: {reason}" if reason else None),
     )
     db.add(log)
-    reason = (args.get("reason") or "").strip()
     return f"Anruf initiiert an {candidate.phone}. Grund: {reason or '—'}"

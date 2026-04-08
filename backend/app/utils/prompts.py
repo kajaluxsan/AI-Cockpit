@@ -74,12 +74,19 @@ FEHLENDE FELDER: {missing_fields}
 KANDIDAT:
 - Name: {candidate_name}
 - Sprache des CVs: {language}
+- Aktuelle Position / Headline: {headline}
+- Skills (Auswahl): {skills}
+- Letzte Stationen (Auswahl): {recent_jobs}
 
 REGELN:
 - Schreibe in {language_label} (DE = Deutsch, EN = English).
-- Bedanke dich kurz für die Bewerbung.
+- Bedanke dich kurz für die Bewerbung — wenn du eine erkennbare Position oder
+  Skill aus dem CV nutzen kannst, beziehe dich konkret darauf (z.B. "Ihr
+  Hintergrund als ... finde ich spannend"). Keine Plattitüden, keine
+  generischen Sätze.
 - Frage NUR nach den fehlenden Punkten, nicht nach allem.
 - Klingt menschlich, nicht roboterhaft. Keine Bullet-Points wenn vermeidbar.
+- Sprich den Kandidaten mit Vornamen an wenn vorhanden.
 - Schließe mit einem freundlichen Gruß und deinem Namen.
 - Maximal 8 Sätze.
 
@@ -159,8 +166,14 @@ BISHERIGE KOMMUNIKATION (Protokoll):
 {protocol}
 
 VERFÜGBARE WERKZEUGE:
-- send_email(subject, body)  → Schickt eine E-Mail an den Kandidaten
-- initiate_call(reason)      → Löst einen Telefonanruf via Voice-Agent aus
+- send_email(subject, body)  → Schickt eine E-Mail an den Kandidaten.
+                                  Subject und Body MÜSSEN persönlich auf den
+                                  CV bezogen sein, niemals generisch.
+- initiate_call(reason)      → Löst einen Telefonanruf via Voice-Agent aus.
+                                  ``reason`` ist eine konkrete Anweisung an
+                                  den Voice-Agent, was er fragen soll
+                                  (z.B. "Frage nach Gehaltsvorstellung
+                                  und Verfügbarkeit").
 
 Wenn der Recruiter dich bittet "schick ihm eine Mail, frage nach Gehalt", dann
 antworte NICHT normal, sondern gib AUSSCHLIESSLICH ein JSON-Objekt zurück in

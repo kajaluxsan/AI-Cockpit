@@ -22,27 +22,42 @@ geöffnet und einzeln minimiert werden — wie bei einem Messenger-Dock.
 
 ## Features
 
-### CRM-Kern (neu)
+### CRM-Kern
 - **CRM Upsert on intake** — jede Mail/Nachricht wird per E-Mail-Adresse
   dedupliziert. Bestehende Profile werden in place aktualisiert, die
   Kommunikations-Historie (Protokoll) bleibt intakt.
 - **NOT-NULL Pflichtfelder** (`CRM_REQUIRED_FIELDS`) — fehlt etwas, sendet die
-  App automatisch eine Follow-up Mail und hält den Kandidaten im Status
-  `info_requested` bis der CV vollständig ist.
+  App automatisch eine **persönliche** Follow-up Mail (Claude verwendet
+  Headline, Skills und letzte Stationen aus dem CV, um nicht generisch zu
+  klingen) und hält den Kandidaten im Status `info_requested` bis der CV
+  vollständig ist.
 - **Vereinigtes Protokoll** pro Kandidat: eingehende/ausgehende Mails, Anrufe
   und AI-Chat als Timeline (`GET /api/candidates/{id}/protocol`).
 - **CV-Speicher** — der Original-CV wird als Datei persistiert und kann im
   UI direkt im PDF-Viewer geöffnet werden
   (`GET /api/candidates/{id}/cv`).
+- **Foto-Extraktion aus dem CV** — beim Ingest wird automatisch das
+  Profilfoto aus dem CV (PDF/DOCX) gezogen und unter
+  `GET /api/candidates/{id}/photo` ausgeliefert. Recruiter können ein Foto
+  manuell hochladen oder die Extraktion erneut anstossen.
 - **External Webhook** für Messages aus einer bestehenden Webapp
-  (`POST /api/messages/inbound`).
+  (`POST /api/messages/inbound`) — geschützt über `X-Webhook-Secret`
+  (Constant-Time Vergleich, optional konfigurierbar via
+  `INBOUND_WEBHOOK_SECRET`).
+- **Auto-Migrations beim Container-Start** — der Backend-Container wartet
+  auf Postgres und führt automatisch `alembic upgrade head` aus, bevor
+  Uvicorn startet.
 
-### AI-Chat pro Kandidat (neu)
+### AI-Chat pro Kandidat
 - Per-Kandidat Chat mit Claude: System-Prompt enthält CV + Protokoll, damit
   der Bot kontextbezogen antworten kann.
 - **Tool-Aufrufe** aus dem Chat: `send_email(subject, body)` oder
   `initiate_call(reason)`. Der Recruiter gibt eine Anweisung in
   Umgangssprache, die App führt sie aus und loggt den Aufruf ins Protokoll.
+- **Call-Objective wird durchgereicht** — die `reason` aus dem AI-Chat
+  ("Frag nach Gehalt und Verfügbarkeit") wird als Query-Parameter an den
+  Twilio-Voice-Webhook angehängt und im `CallLog.summary` persistiert,
+  damit der Recruiter im Protokoll sieht, wozu die KI angerufen hat.
 - **Mini-Chat-Dock** unten rechts: bis zu 5 Kandidaten parallel, einzeln
   minimierbar.
 
@@ -78,11 +93,14 @@ recruiter-ai/
 │       ├── models/         ORM — jetzt mit chat_messages
 │       ├── schemas/        Pydantic schemas
 │       ├── services/       Business logic
-│       │   ├── crm.py           CRM upsert + CV storage
-│       │   ├── cv_parser.py     Claude CV parser
-│       │   ├── matching_engine  Heuristik + Semantik (Claude)
-│       │   ├── voice_agent.py   Twilio + Deepgram + ElevenLabs
+│       │   ├── crm.py             CRM upsert + CV storage + photo wiring
+│       │   ├── cv_parser.py       Claude CV parser
+│       │   ├── photo_extractor.py CV → profile photo (PDF + DOCX)
+│       │   ├── followup_mail.py   Personalised Claude follow-ups
+│       │   ├── matching_engine    Heuristik + Semantik (Claude)
+│       │   ├── voice_agent.py     Twilio + Deepgram + ElevenLabs (objective)
 │       │   └── ...
+│       ├── entrypoint.sh   Wait-for-Postgres + alembic upgrade head + run app
 │       ├── workers/        Background poller (Email, LinkedIn, Matching)
 │       ├── utils/          Prompt templates (inkl. chat system prompt)
 │       └── main.py
@@ -114,17 +132,21 @@ recruiter-ai/
 ```bash
 cp .env.example .env
 # Pflicht:  POSTGRES_PASSWORD, ANTHROPIC_API_KEY
-# Optional: EMAIL_IMAP_*, SMTP, TWILIO_*, ELEVENLABS_*, DEEPGRAM_*
+# Optional: EMAIL_IMAP_*, SMTP, TWILIO_*, ELEVENLABS_*, DEEPGRAM_*,
+#           INBOUND_WEBHOOK_SECRET (für Production)
 
 make up
-make db-upgrade
 open http://localhost:3000
 ```
 
+Der Backend-Container wartet beim Start auf Postgres und führt automatisch
+`alembic upgrade head` aus — `make db-upgrade` ist nur für lokale
+Iteration nötig.
+
 Nach dem Start öffnet sich direkt der **People**-Tab. CVs, die per Mail
 einlaufen, werden automatisch von `EmailPoller` abgeholt, per Claude
-geparst und via `crm.upsert_from_inbound` deduplex angelegt oder
-aktualisiert.
+geparst, das Profilfoto extrahiert und via `crm.upsert_from_inbound`
+deduplex angelegt oder aktualisiert.
 
 ---
 
@@ -228,11 +250,14 @@ Neue Endpoints für's Ranking direkt aus der UI:
 | `GET  /api/candidates/`                     | Suche (name/email/phone/address)     |
 | `POST /api/candidates/upload-cv`            | Manueller CV-Upload (läuft durch CRM)|
 | `GET  /api/candidates/{id}/cv`              | CV-Datei streamen (PDF)              |
+| `GET  /api/candidates/{id}/photo`           | Profilfoto streamen                  |
+| `POST /api/candidates/{id}/photo`           | Foto manuell hochladen (Recruiter)   |
+| `POST /api/candidates/{id}/extract-photo`   | Foto-Extraktion erneut anstossen     |
 | `GET  /api/candidates/{id}/protocol`        | Vereinigtes Timeline                 |
 | `GET  /api/candidates/{id}/matching-jobs`   | Job-Ranking für Kandidat             |
 | `GET  /api/jobs/{id}/candidates`            | Kandidaten-Ranking für Job           |
 | `GET  /api/messages/`                       | Neue Nachrichten (messages tab)      |
-| `POST /api/messages/inbound`                | Webhook für externe Messages         |
+| `POST /api/messages/inbound`                | Webhook für externe Messages (Auth)  |
 | `POST /api/messages/{id}/read`              | Gelesen/ungelesen togglen            |
 | `GET  /api/chat/{candidate_id}`             | AI-Chat History                      |
 | `POST /api/chat/{candidate_id}`             | Nachricht senden + Tool execution    |
@@ -244,6 +269,10 @@ OpenAPI docs: `http://localhost:8000/docs`
 ## Sicherheits-Hinweise
 
 - `.env` enthält Secrets — niemals committen.
+- Setze in Production **immer** `INBOUND_WEBHOOK_SECRET`. Ist die Variable
+  leer, ist `POST /api/messages/inbound` offen — das ist nur für lokale
+  Entwicklung gedacht. Externe Webapps müssen den Secret im Header
+  `X-Webhook-Secret` mitschicken.
 - Twilio Webhook-URLs müssen öffentlich erreichbar sein (z.B. ngrok).
 - Chat-Tool-Ausführung läuft nur, wenn `auto_execute_tools=true` im Request —
   die Frontend-UI setzt das per default. Für einen Dry-Run-Modus kann es

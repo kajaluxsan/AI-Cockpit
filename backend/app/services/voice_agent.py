@@ -48,15 +48,29 @@ def get_twilio_client():
 
 
 def initiate_call(
-    *, to_number: str, candidate_id: int, match_id: int | None = None
+    *,
+    to_number: str,
+    candidate_id: int,
+    match_id: int | None = None,
+    objective: str | None = None,
 ) -> dict[str, Any]:
-    """Place an outbound call. Returns Twilio Call resource info."""
+    """Place an outbound call. Returns Twilio Call resource info.
+
+    ``objective`` is an optional free-text instruction (e.g. "Frag nach
+    Gehaltsvorstellung und Verfügbarkeit"). It is forwarded to the voice
+    handler via a query parameter so the live conversation prompt can pick
+    it up.
+    """
+    from urllib.parse import quote_plus
+
     settings = get_settings()
     client = get_twilio_client()
     base = (settings.twilio_webhook_base_url or "").rstrip("/")
     voice_url = f"{base}/api/webhooks/twilio/voice?candidate_id={candidate_id}"
     if match_id:
         voice_url += f"&match_id={match_id}"
+    if objective:
+        voice_url += f"&objective={quote_plus(objective[:500])}"
 
     call = client.calls.create(
         to=to_number,

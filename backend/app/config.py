@@ -153,6 +153,14 @@ class Settings(BaseSettings):
     )
 
     # ---------------------------------------------------------------
+    # WEBHOOKS (inbound)
+    # ---------------------------------------------------------------
+    # Shared secret callers must include in the ``X-Webhook-Secret`` header
+    # when POSTing to /api/messages/inbound. If unset (or empty), the endpoint
+    # is open — fine for local dev, NOT acceptable for production.
+    inbound_webhook_secret: str | None = None
+
+    # ---------------------------------------------------------------
     # AGENT IDENTITY
     # ---------------------------------------------------------------
     agent_name: str = "Lara"
