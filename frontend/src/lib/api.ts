@@ -182,6 +182,10 @@ export const settings = {
   get: () => http.get<AppSettings>("/api/settings/").then((r) => r.data),
 };
 
+export type RuntimeConfig = {
+  crm_required_fields: string[];
+};
+
 export const settingsApi = {
   get: () => http.get<AppSettings>("/api/settings/").then((r) => r.data),
   testEmail: (to: string) =>
@@ -194,4 +198,8 @@ export const settingsApi = {
     http
       .post<Record<string, unknown>>("/api/settings/test/twilio")
       .then((r) => r.data),
+  getRuntime: () =>
+    http.get<RuntimeConfig>("/api/settings/runtime").then((r) => r.data),
+  updateRuntime: (patch: Partial<RuntimeConfig>) =>
+    http.put<RuntimeConfig>("/api/settings/runtime", patch).then((r) => r.data),
 };

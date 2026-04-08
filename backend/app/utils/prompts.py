@@ -12,7 +12,7 @@ CV_PARSE_PROMPT = """Du bist ein hochpräziser CV-Parser. Extrahiere aus dem fol
   "phone": str | null,
   "address": str | null,              // Strasse, PLZ, Ort
   "location": str | null,             // Stadt / Region
-  "language": "de" | "en" | null,    // Sprache des CVs
+  "language": "de" | "en" | "fr" | "it" | null, // Sprache des CVs
   "headline": str | null,             // Aktuelle Position oder Headline
   "summary": str | null,              // Kurze Zusammenfassung (max 3 Sätze)
   "skills": [str, ...],               // Liste aller technischen + Soft Skills
@@ -79,7 +79,7 @@ KANDIDAT:
 - Letzte Stationen (Auswahl): {recent_jobs}
 
 REGELN:
-- Schreibe in {language_label} (DE = Deutsch, EN = English).
+- Schreibe in {language_label} (DE = Deutsch, EN = English, FR = Français, IT = Italiano).
 - Bedanke dich kurz für die Bewerbung — wenn du eine erkennbare Position oder
   Skill aus dem CV nutzen kannst, beziehe dich konkret darauf (z.B. "Ihr
   Hintergrund als ... finde ich spannend"). Keine Plattitüden, keine
@@ -145,7 +145,7 @@ Antworte AUSSCHLIESSLICH mit JSON:
 """
 
 
-LANGUAGE_DETECT_PROMPT = """Welche Sprache spricht die Person in folgendem Text? Antworte NUR mit einem der beiden Codes: "de" oder "en". Keine weiteren Wörter.
+LANGUAGE_DETECT_PROMPT = """Welche Sprache spricht die Person in folgendem Text? Antworte NUR mit einem der folgenden Codes: "de", "en", "fr", "it". Keine weiteren Wörter.
 
 Text:
 {text}

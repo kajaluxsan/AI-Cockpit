@@ -26,6 +26,7 @@ from app.database import get_db
 from app.models.candidate import Candidate, CandidateSource
 from app.models.email_log import EmailDirection, EmailKind, EmailLog
 from app.services import crm
+from app.services.event_broker import broker
 
 router = APIRouter()
 
@@ -169,6 +170,17 @@ async def inbound_webhook(
     await db.commit()
     photo_url = (
         f"/api/candidates/{candidate.id}/photo" if candidate.photo_url else None
+    )
+    # Fan out to any open WebSocket subscribers so the Messages tab live-
+    # refreshes without requiring the recruiter to reload the page.
+    await broker.publish(
+        "message.new",
+        {
+            "message_id": log.id,
+            "candidate_id": candidate.id,
+            "candidate_name": candidate.full_name,
+            "subject": log.subject,
+        },
     )
     return MessageOut(
         id=log.id,

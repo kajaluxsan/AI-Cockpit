@@ -24,11 +24,18 @@ router = APIRouter()
 async def twilio_voice_webhook(
     candidate_id: int = Query(...),
     match_id: int | None = Query(default=None),
+    objective: str | None = Query(default=None),
 ):
     """Twilio hits this when the call connects. We return TwiML that opens
-    a bidirectional Media Stream back to our WebSocket handler."""
+    a bidirectional Media Stream back to our WebSocket handler.
+
+    ``objective`` is forwarded from ``initiate_call`` (e.g. a reason from the
+    per-candidate AI chat like "Frag nach Gehalt und Verfügbarkeit"). It is
+    piped into the voice conversation system prompt so the voice agent
+    pursues that specific goal during the call.
+    """
     twiml = voice_agent.generate_voice_twiml(
-        candidate_id=candidate_id, match_id=match_id
+        candidate_id=candidate_id, match_id=match_id, objective=objective
     )
     return Response(content=twiml, media_type="application/xml")
 
@@ -61,7 +68,11 @@ async def twilio_media_stream(websocket: WebSocket):
     await websocket.accept()
     logger.info("Twilio media stream connected")
 
-    async def get_session_for_candidate(candidate_id: int, match_id: int | None):
+    async def get_session_for_candidate(
+        candidate_id: int,
+        match_id: int | None,
+        objective: str | None = None,
+    ):
         async with SessionLocal() as db:
             cand_q = select(Candidate).where(Candidate.id == candidate_id)
             cand = (await db.execute(cand_q)).scalar_one_or_none()
@@ -78,6 +89,7 @@ async def twilio_media_stream(websocket: WebSocket):
                 candidate=cand,
                 job=job,
                 language=(cand.language if cand and cand.language else "de"),
+                objective=objective,
             )
 
     try:

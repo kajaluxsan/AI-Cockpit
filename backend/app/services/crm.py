@@ -30,9 +30,9 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
 from app.models.candidate import Candidate, CandidateSource, CandidateStatus
 from app.models.email_log import EmailDirection, EmailKind, EmailLog
+from app.services import runtime_config
 from app.services.photo_extractor import extract_photo
 
 CV_STORAGE_DIR = Path(os.getenv("CV_STORAGE_DIR", "/data/cv"))
@@ -46,10 +46,13 @@ class UpsertResult:
 
 
 def _required_missing(data: dict[str, Any]) -> list[str]:
-    """Return the list of CRM required fields that are missing from ``data``."""
-    settings = get_settings()
+    """Return the list of CRM required fields that are missing from ``data``.
+
+    The field set comes from :mod:`app.services.runtime_config` so the
+    recruiter can edit it from the Settings UI without redeploying.
+    """
     missing: list[str] = []
-    for field in settings.crm_required_field_list:
+    for field in runtime_config.get_crm_required_fields():
         value = data.get(field)
         if value is None:
             missing.append(field)

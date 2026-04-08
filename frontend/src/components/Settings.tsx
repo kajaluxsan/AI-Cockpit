@@ -1,11 +1,54 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApi } from "@/hooks/useApi";
 import { settingsApi } from "@/lib/api";
 
+const ALL_CRM_FIELDS = [
+  "first_name",
+  "last_name",
+  "email",
+  "phone",
+  "address",
+];
+
 export default function Settings() {
   const { data } = useApi(() => settingsApi.get(), []);
+  const { data: runtime, reload: reloadRuntime } = useApi(
+    () => settingsApi.getRuntime(),
+    []
+  );
+  const [selectedFields, setSelectedFields] = useState<string[]>([]);
+  const [runtimeSaving, setRuntimeSaving] = useState(false);
+  const [runtimeMessage, setRuntimeMessage] = useState<string | null>(null);
   const [testEmail, setTestEmail] = useState("");
   const [testResult, setTestResult] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (runtime?.crm_required_fields) {
+      setSelectedFields(runtime.crm_required_fields);
+    }
+  }, [runtime]);
+
+  const toggleField = (f: string) => {
+    setSelectedFields((cur) =>
+      cur.includes(f) ? cur.filter((x) => x !== f) : [...cur, f]
+    );
+  };
+
+  const saveRuntime = async () => {
+    setRuntimeSaving(true);
+    setRuntimeMessage(null);
+    try {
+      await settingsApi.updateRuntime({ crm_required_fields: selectedFields });
+      setRuntimeMessage("Gespeichert.");
+      reloadRuntime();
+    } catch (e: any) {
+      setRuntimeMessage(
+        `Fehler: ${e?.response?.data?.detail || e.message || "unbekannt"}`
+      );
+    } finally {
+      setRuntimeSaving(false);
+    }
+  };
 
   const sendTestEmail = async () => {
     setTestResult(null);
@@ -85,6 +128,51 @@ export default function Settings() {
           <Row k="Base URL" v={data.external_api.base_url || "—"} />
           <Row k="Auth type" v={data.external_api.auth_type} />
         </Card>
+      </div>
+
+      <div className="card p-6">
+        <h2 className="font-display text-lg font-semibold mb-1">
+          CRM Pflichtfelder (runtime)
+        </h2>
+        <p className="text-sm text-text-secondary mb-4">
+          Felder, die bei einer neuen Bewerbung vorhanden sein müssen. Fehlt
+          eines, wird eine Follow-up Mail verschickt und das Profil bleibt
+          im Status <code>info_requested</code>. Änderungen werden
+          persistiert und sofort bei der nächsten Nachricht wirksam — kein
+          Redeploy nötig.
+        </p>
+        <div className="flex flex-wrap gap-2 mb-4">
+          {ALL_CRM_FIELDS.map((f) => {
+            const active = selectedFields.includes(f);
+            return (
+              <button
+                key={f}
+                type="button"
+                onClick={() => toggleField(f)}
+                className={
+                  "px-3 py-1.5 rounded-md text-xs font-mono border " +
+                  (active
+                    ? "bg-amber-accent/15 border-amber-accent/60 text-amber-accent"
+                    : "bg-bg-elevated border-bg-border text-text-muted hover:text-text-primary")
+                }
+              >
+                {f}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            className="btn-primary text-sm"
+            onClick={saveRuntime}
+            disabled={runtimeSaving || selectedFields.length === 0}
+          >
+            {runtimeSaving ? "Speichern…" : "Speichern"}
+          </button>
+          {runtimeMessage && (
+            <span className="text-xs text-text-muted">{runtimeMessage}</span>
+          )}
+        </div>
       </div>
 
       <div className="card p-6">

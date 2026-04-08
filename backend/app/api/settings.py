@@ -1,13 +1,27 @@
-"""Settings inspection API. All values come from .env (read-only)."""
+"""Settings inspection API.
+
+Most values come from ``.env`` and are read-only here. The few values a
+recruiter is allowed to tune at runtime (e.g. the CRM required field set)
+live in :mod:`app.services.runtime_config`, which is persisted to a JSON
+file inside ``CV_STORAGE_DIR``.
+"""
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from app.config import get_settings
+from app.services import runtime_config
 from app.services.email_service import send_email
 
 router = APIRouter()
+
+
+class RuntimeConfigPatch(BaseModel):
+    crm_required_fields: list[str] | str | None = None
 
 
 @router.get("/")
@@ -82,3 +96,22 @@ async def test_twilio():
         "phone_number": s.twilio_phone_number,
         "message": "Twilio credentials present" if s.twilio_account_sid else "Twilio not configured",
     }
+
+
+@router.get("/runtime")
+async def get_runtime_config() -> dict[str, Any]:
+    """Return the runtime-overridable config (CRM required fields, etc)."""
+    return runtime_config.get_all()
+
+
+@router.put("/runtime")
+async def update_runtime_config(patch: RuntimeConfigPatch) -> dict[str, Any]:
+    """Update the runtime-overridable config. Currently supports
+    ``crm_required_fields``; additional keys will surface validation errors."""
+    values = patch.model_dump(exclude_unset=True, exclude_none=True)
+    if not values:
+        return runtime_config.get_all()
+    try:
+        return runtime_config.update(values)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

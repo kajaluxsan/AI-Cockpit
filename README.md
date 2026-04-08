@@ -47,6 +47,19 @@ geöffnet und einzeln minimiert werden — wie bei einem Messenger-Dock.
 - **Auto-Migrations beim Container-Start** — der Backend-Container wartet
   auf Postgres und führt automatisch `alembic upgrade head` aus, bevor
   Uvicorn startet.
+- **Runtime-konfigurierbare CRM-Pflichtfelder** — über die Settings-UI
+  kann der Recruiter `CRM_REQUIRED_FIELDS` ohne Redeploy ändern. Die
+  Werte werden in einer JSON-Datei im CV-Storage-Volume persistiert und
+  bei der nächsten Upsert-Operation automatisch berücksichtigt
+  (`PUT /api/settings/runtime`).
+- **Live-Events via WebSocket** — neue Mails, eingehende Webhook-Events
+  und Chat-Aktionen werden über `/api/events/ws` an das Frontend gepusht,
+  sodass die People/Messages/Chat-Ansichten sich ohne manuelles Reload
+  aktualisieren. In-Memory Pub/Sub (`EventBroker`), keine zusätzliche
+  Infrastruktur nötig.
+- **Quadrilingual (DE · EN · FR · IT)** — CH-spezifisch, alle vier
+  Landessprachen werden bei Sprach-Erkennung, Follow-up-Mails (inkl.
+  Fallback-Templates) und Voice-Opener unterstützt.
 
 ### AI-Chat pro Kandidat
 - Per-Kandidat Chat mit Claude: System-Prompt enthält CV + Protokoll, damit
@@ -54,18 +67,27 @@ geöffnet und einzeln minimiert werden — wie bei einem Messenger-Dock.
 - **Tool-Aufrufe** aus dem Chat: `send_email(subject, body)` oder
   `initiate_call(reason)`. Der Recruiter gibt eine Anweisung in
   Umgangssprache, die App führt sie aus und loggt den Aufruf ins Protokoll.
-- **Call-Objective wird durchgereicht** — die `reason` aus dem AI-Chat
-  ("Frag nach Gehalt und Verfügbarkeit") wird als Query-Parameter an den
-  Twilio-Voice-Webhook angehängt und im `CallLog.summary` persistiert,
-  damit der Recruiter im Protokoll sieht, wozu die KI angerufen hat.
+- **Call-Objective wird end-to-end durchgereicht** — die `reason` aus dem
+  AI-Chat ("Frag nach Gehalt und Verfügbarkeit") wird als Query-Parameter
+  an den Twilio-Voice-Webhook angehängt, als TwiML `<Parameter>` in den
+  Media-Stream gelegt, beim `start`-Event der WebSocket in die
+  `CallSession.objective` geschrieben und im `build_system_prompt` als
+  "ZUSÄTZLICHER AUFTRAG VOM RECRUITER (höchste Priorität)" angehängt —
+  ausserdem im `CallLog.summary` persistiert, damit der Recruiter im
+  Protokoll sieht, wozu die KI angerufen hat.
+- **Rate-Limit** auf dem Chat-Endpoint: max. 12 Turns pro Kandidat pro
+  Minute (in-memory sliding window) — bricht Agent-Loops ab, bevor sie
+  Claude- oder Twilio-Kosten verursachen.
 - **Mini-Chat-Dock** unten rechts: bis zu 5 Kandidaten parallel, einzeln
-  minimierbar.
+  minimierbar. Die Fenster aktualisieren sich live über `chat.append`
+  Events, wenn ein anderer Browser-Tab eine Antwort generiert.
 
 ### Matching & Voice (aus dem Original übernommen)
 - Heuristisches Matching (Skills, Erfahrung, Ort, Salary, Verfügbarkeit)
   plus optionaler semantischer Pass durch Claude.
 - Voice-Agent: Twilio Outbound Call → WebSocket Media Stream →
-  Deepgram STT → Claude Konversation → ElevenLabs TTS. DE/EN automatisch.
+  Deepgram STT → Claude Konversation → ElevenLabs TTS. DE/EN/FR/IT mit
+  automatischer Sprach-Erkennung (Heuristik + Claude-Fallback).
 - Post-Call Summary per Claude, Mail an Recruiter.
 
 ### UI
@@ -73,9 +95,11 @@ geöffnet und einzeln minimiert werden — wie bei einem Messenger-Dock.
   für Overview/Matches/Calls/Emails/Settings.
 - **People-Tab**: einzige Suchleiste matched auf Name, Mail, Telefon,
   Adresse. Grid mit Avatar, Name, Kontakt & Status, sortierbar nach
-  zuletzt aktualisiert oder Nachname A–Z.
+  zuletzt aktualisiert oder Nachname A–Z. Pagination per "Mehr laden"
+  Button (60 Zeilen / Seite).
 - **Messages-Tab**: eingehende Nachrichten (Mails und Webhook-Events)
-  mit Lesen-Toggle.
+  mit Lesen-Toggle. Pagination per "Mehr laden" Button (50 Zeilen /
+  Seite).
 - **Jobs-Tab**: Suche nach Titel / Firma / Ort / Beschreibung; Detailseite
   zeigt das Ranking passender Kandidaten per Knopfdruck.
 - **Candidate-Detail**: Foto, alle Daten, CV als PDF im iframe, Liste
@@ -175,11 +199,17 @@ deduplex angelegt oder aktualisiert.
                                              └───────────────────────┘
 ```
 
-Die Konfiguration der NOT-NULL Felder passiert in `.env`:
+Die Konfiguration der NOT-NULL Felder passiert primär in `.env`:
 
 ```env
 CRM_REQUIRED_FIELDS=first_name,last_name,email,phone
 ```
+
+…kann aber zur Laufzeit vom Recruiter in der **Settings-UI** überschrieben
+werden. Die Überschreibung lebt in `runtime_config.json` innerhalb des
+CV-Storage-Volumes und überlebt Container-Neustarts ohne DB-Migration. Die
+nächste eingehende Bewerbung liest den neuen Wert sofort über einen
+mtime-Cache.
 
 ---
 
@@ -261,6 +291,9 @@ Neue Endpoints für's Ranking direkt aus der UI:
 | `POST /api/messages/{id}/read`              | Gelesen/ungelesen togglen            |
 | `GET  /api/chat/{candidate_id}`             | AI-Chat History                      |
 | `POST /api/chat/{candidate_id}`             | Nachricht senden + Tool execution    |
+| `GET  /api/settings/runtime`                | Runtime-Config (CRM Pflichtfelder)   |
+| `PUT  /api/settings/runtime`                | Runtime-Config editieren             |
+| `WS   /api/events/ws`                       | Live-Events Push (message.new, chat) |
 
 OpenAPI docs: `http://localhost:8000/docs`
 
@@ -279,6 +312,22 @@ OpenAPI docs: `http://localhost:8000/docs`
   abgeschaltet werden.
 - Alle ausgehenden API-Calls (Claude, Deepgram, ElevenLabs, Twilio, …) laufen
   in try/except mit strukturiertem Logging via `loguru`.
+
+---
+
+## Tests
+
+Die Unit-Suite läuft ohne DB oder Docker — alles sind reine
+Helper-Funktionen (CRM missing-field check, photo picker, webhook secret
+guard, Runtime-Config roundtrips, Follow-up Mail Fallbacks in allen vier
+Sprachen):
+
+```bash
+cd backend
+uv run pytest tests/
+```
+
+Erwartete Ausgabe: **23 passed**.
 
 ---
 

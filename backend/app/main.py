@@ -15,6 +15,7 @@ from app.api import (
     chat,
     dashboard,
     emails,
+    events,
     jobs,
     matches,
     messages,
@@ -89,6 +90,7 @@ app.include_router(calls.router, prefix="/api/calls", tags=["calls"])
 app.include_router(emails.router, prefix="/api/emails", tags=["emails"])
 app.include_router(messages.router, prefix="/api/messages", tags=["messages"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+app.include_router(events.router, prefix="/api/events", tags=["events"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["settings"])
 app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])
 

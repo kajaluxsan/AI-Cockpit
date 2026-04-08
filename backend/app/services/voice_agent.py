@@ -95,7 +95,14 @@ def initiate_call(
 # ---------------------------------------------------------------------------
 # TwiML generation for incoming voice webhook
 # ---------------------------------------------------------------------------
-def generate_voice_twiml(*, candidate_id: int, match_id: int | None = None) -> str:
+def generate_voice_twiml(
+    *,
+    candidate_id: int,
+    match_id: int | None = None,
+    objective: str | None = None,
+) -> str:
+    from xml.sax.saxutils import escape
+
     settings = get_settings()
     base = (settings.twilio_webhook_base_url or "").rstrip("/")
     # Replace https/http with wss/ws for the WebSocket URL
@@ -105,6 +112,9 @@ def generate_voice_twiml(*, candidate_id: int, match_id: int | None = None) -> s
     params = f'<Parameter name="candidate_id" value="{candidate_id}" />'
     if match_id:
         params += f'<Parameter name="match_id" value="{match_id}" />'
+    if objective:
+        safe_obj = escape(objective[:500], {'"': "&quot;"})
+        params += f'<Parameter name="objective" value="{safe_obj}" />'
 
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -209,16 +219,28 @@ class CallSession:
     candidate: Candidate | None
     job: Job | None
     language: str = "de"
+    # Optional free-text instruction from the AI chat tool call. When set,
+    # it is injected into the voice system prompt so the agent pursues that
+    # concrete objective during the call instead of the default job-pitch.
+    objective: str | None = None
     history: list[dict[str, str]] = field(default_factory=list)
     transcript_segments: list[dict[str, Any]] = field(default_factory=list)
     audio_buffer: bytearray = field(default_factory=bytearray)
 
 
 def build_system_prompt(
-    candidate: Candidate | None, job: Job | None, language: str
+    candidate: Candidate | None,
+    job: Job | None,
+    language: str,
+    objective: str | None = None,
 ) -> str:
     settings = get_settings()
-    language_label = "Deutsch (Schweiz)" if language == "de" else "English"
+    language_label = {
+        "de": "Deutsch (Schweiz)",
+        "en": "English",
+        "fr": "Français",
+        "it": "Italiano",
+    }.get(language, "Deutsch (Schweiz)")
     if candidate:
         candidate_profile = (
             f"Name: {candidate.full_name}\n"
@@ -233,7 +255,7 @@ def build_system_prompt(
     else:
         candidate_profile = "(unbekannt)"
         candidate_name = "der Kandidat" if language == "de" else "the candidate"
-    return VOICE_CONVERSATION_PROMPT.format(
+    prompt = VOICE_CONVERSATION_PROMPT.format(
         agent_name=settings.agent_name,
         company_name=settings.company_name,
         candidate_name=candidate_name,
@@ -244,11 +266,23 @@ def build_system_prompt(
         candidate_profile=candidate_profile,
         language_label=language_label,
     )
+    if objective:
+        # Append as an explicit, high-priority instruction so the agent
+        # opens with / circles back to the recruiter's specific ask.
+        prompt += (
+            "\n\nZUSÄTZLICHER AUFTRAG VOM RECRUITER (höchste Priorität):\n"
+            f"→ {objective}\n"
+            "Achte darauf, dieses Anliegen im Gespräch aktiv zu klären, "
+            "bevor du das Gespräch beendest."
+        )
+    return prompt
 
 
 async def generate_agent_reply(session: CallSession, user_text: str) -> str:
     claude = get_claude_client()
-    system = build_system_prompt(session.candidate, session.job, session.language)
+    system = build_system_prompt(
+        session.candidate, session.job, session.language, session.objective
+    )
     reply = await claude.conversation_turn(
         system=system,
         history=session.history,
@@ -260,7 +294,7 @@ async def generate_agent_reply(session: CallSession, user_text: str) -> str:
 
 
 async def opening_line(language: str | None = None) -> str:
-    """Bilingual opener until language is detected."""
+    """Multilingual opener until language is detected."""
     settings = get_settings()
     if language == "de":
         return (
@@ -272,10 +306,23 @@ async def opening_line(language: str | None = None) -> str:
             f"Hello, this is {settings.agent_name} from {settings.company_name}. "
             "I'm calling about an open position. Is now a good time to talk?"
         )
+    if language == "fr":
+        return (
+            f"Bonjour, je suis {settings.agent_name} de {settings.company_name}. "
+            "Je vous appelle au sujet d'un poste ouvert. Est-ce que c'est un "
+            "bon moment pour discuter ?"
+        )
+    if language == "it":
+        return (
+            f"Buongiorno, sono {settings.agent_name} di {settings.company_name}. "
+            "La chiamo per una posizione aperta. È un buon momento per parlare?"
+        )
+    # Default: quadrilingual greeting so the caller can pick
     return (
-        f"Grüezi, hello, mein Name ist {settings.agent_name} von {settings.company_name}. "
-        f"I'm calling on behalf of {settings.company_name}. "
-        "In welcher Sprache möchten Sie weiterfahren? Which language would you prefer?"
+        f"Grüezi, bonjour, hello, buongiorno — mein Name ist "
+        f"{settings.agent_name} von {settings.company_name}. "
+        "In welcher Sprache möchten Sie weiterfahren? "
+        "Quelle langue préférez-vous ? Which language would you prefer?"
     )
 
 
@@ -300,8 +347,11 @@ async def handle_media_stream(websocket, *, get_session_for_candidate) -> None:
                 params = data["start"].get("customParameters", {})
                 candidate_id = int(params.get("candidate_id", 0))
                 match_id = params.get("match_id")
+                objective = params.get("objective") or None
                 session = await get_session_for_candidate(
-                    candidate_id, int(match_id) if match_id else None
+                    candidate_id,
+                    int(match_id) if match_id else None,
+                    objective,
                 )
                 opener = await opening_line(None)
                 audio = await synthesize_speech(opener, language=session.language)
@@ -319,7 +369,10 @@ async def handle_media_stream(websocket, *, get_session_for_candidate) -> None:
                     transcript, detected = await transcribe_audio_chunks(audio)
                     if transcript:
                         if detected and detected != session.language:
-                            session.language = "de" if detected.startswith("de") else "en"
+                            for code in ("de", "en", "fr", "it"):
+                                if detected.startswith(code):
+                                    session.language = code
+                                    break
                         session.transcript_segments.append(
                             {"role": "user", "text": transcript}
                         )
