@@ -30,9 +30,10 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
 from app.models.candidate import Candidate, CandidateSource, CandidateStatus
 from app.models.email_log import EmailDirection, EmailKind, EmailLog
+from app.services import runtime_config
+from app.services.photo_extractor import extract_photo
 
 CV_STORAGE_DIR = Path(os.getenv("CV_STORAGE_DIR", "/data/cv"))
 
@@ -45,10 +46,13 @@ class UpsertResult:
 
 
 def _required_missing(data: dict[str, Any]) -> list[str]:
-    """Return the list of CRM required fields that are missing from ``data``."""
-    settings = get_settings()
+    """Return the list of CRM required fields that are missing from ``data``.
+
+    The field set comes from :mod:`app.services.runtime_config` so the
+    recruiter can edit it from the Settings UI without redeploying.
+    """
     missing: list[str] = []
-    for field in settings.crm_required_field_list:
+    for field in runtime_config.get_crm_required_fields():
         value = data.get(field)
         if value is None:
             missing.append(field)
@@ -140,6 +144,11 @@ async def upsert_from_inbound(
         if cv_path and not existing.cv_attachment_path:
             existing.cv_attachment_path = cv_path
             existing.cv_filename = cv_filename
+        # Extract a profile photo from the CV the first time we see one
+        if cv_bytes and not existing.photo_url:
+            photo_path = extract_photo(cv_filename, cv_bytes)
+            if photo_path:
+                existing.photo_url = photo_path
         if not missing and existing.status == CandidateStatus.INFO_REQUESTED:
             existing.status = CandidateStatus.PARSED
             existing.missing_fields = None
@@ -148,6 +157,7 @@ async def upsert_from_inbound(
 
     # New candidate
     cv_path = _store_cv(cv_filename, cv_bytes)
+    photo_path = extract_photo(cv_filename, cv_bytes) if cv_bytes else None
     candidate = Candidate(
         first_name=parsed.get("first_name"),
         last_name=parsed.get("last_name"),
@@ -172,6 +182,7 @@ async def upsert_from_inbound(
         cv_text=cv_text[:200000] if cv_text else None,
         cv_attachment_path=cv_path,
         cv_filename=cv_filename,
+        photo_url=photo_path,
         status=(
             CandidateStatus.INFO_REQUESTED if missing else CandidateStatus.PARSED
         ),

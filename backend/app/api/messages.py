@@ -12,18 +12,21 @@ It also exposes two write endpoints:
 
 from __future__ import annotations
 
+import hmac
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import get_db
 from app.models.candidate import Candidate, CandidateSource
 from app.models.email_log import EmailDirection, EmailKind, EmailLog
 from app.services import crm
+from app.services.event_broker import broker
 
 router = APIRouter()
 
@@ -82,12 +85,15 @@ async def list_messages(
     out: list[MessageOut] = []
     for log in logs:
         cand = candidates.get(log.candidate_id) if log.candidate_id else None
+        photo_url = (
+            f"/api/candidates/{cand.id}/photo" if cand and cand.photo_url else None
+        )
         out.append(
             MessageOut(
                 id=log.id,
                 candidate_id=log.candidate_id,
                 candidate_name=(cand.full_name if cand else None),
-                candidate_photo_url=(cand.photo_url if cand else None),
+                candidate_photo_url=photo_url,
                 direction=log.direction,
                 kind=log.kind,
                 from_address=log.from_address,
@@ -101,16 +107,36 @@ async def list_messages(
     return out
 
 
+def _verify_webhook_secret(provided: str | None) -> None:
+    """Constant-time check of the X-Webhook-Secret header.
+
+    If ``INBOUND_WEBHOOK_SECRET`` is unset, the check is a no-op so the
+    endpoint stays open in dev. If set, callers MUST present a matching
+    secret or the request is rejected with 401.
+    """
+    expected = (get_settings().inbound_webhook_secret or "").strip()
+    if not expected:
+        return
+    if not provided or not hmac.compare_digest(expected, provided.strip()):
+        raise HTTPException(status_code=401, detail="Invalid webhook secret")
+
+
 @router.post("/inbound", response_model=MessageOut, status_code=201)
 async def inbound_webhook(
-    payload: InboundMessagePayload, db: AsyncSession = Depends(get_db)
+    payload: InboundMessagePayload,
+    db: AsyncSession = Depends(get_db),
+    x_webhook_secret: str | None = Header(default=None, alias="X-Webhook-Secret"),
 ):
     """Ingest a message from the external REST API / webapp.
+
+    Authentication: requires the ``X-Webhook-Secret`` header to match
+    ``INBOUND_WEBHOOK_SECRET`` from configuration when that secret is set.
 
     Matches by email to an existing candidate. If none exists, a placeholder
     profile is created so the conversation can still be tracked — but it will
     be in ``info_requested`` state and require follow-up.
     """
+    _verify_webhook_secret(x_webhook_secret)
     email = payload.from_address.lower()
     candidate = (
         await db.execute(select(Candidate).where(Candidate.email.ilike(email)))
@@ -142,11 +168,25 @@ async def inbound_webhook(
         message_id=payload.message_id,
     )
     await db.commit()
+    photo_url = (
+        f"/api/candidates/{candidate.id}/photo" if candidate.photo_url else None
+    )
+    # Fan out to any open WebSocket subscribers so the Messages tab live-
+    # refreshes without requiring the recruiter to reload the page.
+    await broker.publish(
+        "message.new",
+        {
+            "message_id": log.id,
+            "candidate_id": candidate.id,
+            "candidate_name": candidate.full_name,
+            "subject": log.subject,
+        },
+    )
     return MessageOut(
         id=log.id,
         candidate_id=candidate.id,
         candidate_name=candidate.full_name,
-        candidate_photo_url=candidate.photo_url,
+        candidate_photo_url=photo_url,
         direction=log.direction,
         kind=log.kind,
         from_address=log.from_address,

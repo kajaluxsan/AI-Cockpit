@@ -22,6 +22,7 @@ from app.models.candidate import CandidateSource, CandidateStatus
 from app.models.email_log import EmailDirection, EmailKind, EmailLog
 from app.services import crm, cv_parser
 from app.services.email_service import IncomingEmail, get_email_service
+from app.services.event_broker import broker
 from app.services.followup_mail import send_followup_email
 from app.workers.match_processor import process_new_candidate
 
@@ -110,6 +111,17 @@ class EmailPoller:
             )
             await db.commit()
             await db.refresh(candidate)
+
+            # Live-notify UI clients so Messages / People tabs refresh
+            await broker.publish(
+                "message.new",
+                {
+                    "candidate_id": candidate.id,
+                    "candidate_name": candidate.full_name,
+                    "subject": em.subject,
+                    "created": result.created,
+                },
+            )
 
             # Auto follow-up for missing CRM required fields
             if (

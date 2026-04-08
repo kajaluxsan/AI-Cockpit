@@ -64,6 +64,17 @@ export const candidates = {
       .then((r) => r.data),
 
   cvUrl: (id: number) => `${BASE_URL}/api/candidates/${id}/cv`,
+  photoUrl: (id: number) => `${BASE_URL}/api/candidates/${id}/photo`,
+
+  /**
+   * Resolve a relative photo path returned by the API into an absolute URL
+   * the browser can render, or `null` when the candidate has no photo.
+   */
+  resolvePhoto: (relativeOrAbsolute?: string | null): string | null => {
+    if (!relativeOrAbsolute) return null;
+    if (/^https?:\/\//i.test(relativeOrAbsolute)) return relativeOrAbsolute;
+    return `${BASE_URL}${relativeOrAbsolute}`;
+  },
 
   uploadCv: (file: File, email?: string) => {
     const fd = new FormData();
@@ -73,6 +84,19 @@ export const candidates = {
       .post<Candidate>("/api/candidates/upload-cv", fd)
       .then((r) => r.data);
   },
+
+  uploadPhoto: (id: number, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return http
+      .post<Candidate>(`/api/candidates/${id}/photo`, fd)
+      .then((r) => r.data);
+  },
+
+  reextractPhoto: (id: number) =>
+    http
+      .post<Candidate>(`/api/candidates/${id}/extract-photo`)
+      .then((r) => r.data),
 
   saveNotes: (id: number, notes: string) =>
     http.post<Candidate>(`/api/candidates/${id}/notes`, { notes }).then((r) => r.data),
@@ -158,6 +182,10 @@ export const settings = {
   get: () => http.get<AppSettings>("/api/settings/").then((r) => r.data),
 };
 
+export type RuntimeConfig = {
+  crm_required_fields: string[];
+};
+
 export const settingsApi = {
   get: () => http.get<AppSettings>("/api/settings/").then((r) => r.data),
   testEmail: (to: string) =>
@@ -170,4 +198,8 @@ export const settingsApi = {
     http
       .post<Record<string, unknown>>("/api/settings/test/twilio")
       .then((r) => r.data),
+  getRuntime: () =>
+    http.get<RuntimeConfig>("/api/settings/runtime").then((r) => r.data),
+  updateRuntime: (patch: Partial<RuntimeConfig>) =>
+    http.put<RuntimeConfig>("/api/settings/runtime", patch).then((r) => r.data),
 };

@@ -21,6 +21,11 @@ RUN uv sync
 # Copy the rest of the app
 COPY . .
 
+# Entrypoint runs `alembic upgrade head` before launching the app so the
+# database schema is always in sync with the code.
+RUN chmod +x /app/entrypoint.sh
+
 EXPOSE 8000
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

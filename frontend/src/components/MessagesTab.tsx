@@ -1,15 +1,51 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { useApi } from "@/hooks/useApi";
+import { useLiveEvent } from "@/hooks/useLiveEvents";
 import { messages as messagesApi } from "@/lib/api";
+import type { Message } from "@/types";
 import Avatar from "./shared/Avatar";
+
+const PAGE_SIZE = 50;
 
 export default function MessagesTab() {
   const [onlyUnanswered, setOnlyUnanswered] = useState(true);
-  const { data, loading, reload } = useApi(
-    () => messagesApi.list({ only_unanswered: onlyUnanswered, limit: 100 }),
-    [onlyUnanswered]
-  );
+  const [items, setItems] = useState<Message[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
+  const [displayLimit, setDisplayLimit] = useState(PAGE_SIZE);
+
+  const reload = async () => {
+    setLoading(true);
+    try {
+      // Backend /api/messages does not paginate by offset yet; we fetch a
+      // generous window and render it incrementally client-side.
+      const rows = await messagesApi.list({
+        only_unanswered: onlyUnanswered,
+        limit: 500,
+      });
+      setItems(rows);
+      setDisplayLimit(PAGE_SIZE);
+      setHasMore(rows.length > PAGE_SIZE);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onlyUnanswered]);
+
+  // Live-refresh when a new inbound message arrives (email poller or webhook)
+  useLiveEvent("message.new", () => {
+    reload();
+  });
+
+  const loadMore = () => {
+    const next = displayLimit + PAGE_SIZE;
+    setDisplayLimit(next);
+    setHasMore(next < items.length);
+  };
 
   const toggleRead = async (id: number, answered: boolean) => {
     await messagesApi.markRead(id, answered);
@@ -38,14 +74,14 @@ export default function MessagesTab() {
       </div>
 
       {loading && <div className="text-text-muted">Lade…</div>}
-      {!loading && (data?.length ?? 0) === 0 && (
+      {!loading && items.length === 0 && (
         <div className="card p-10 text-center text-text-muted">
           Keine neuen Nachrichten.
         </div>
       )}
 
       <div className="space-y-2">
-        {(data ?? []).map((m) => (
+        {items.slice(0, displayLimit).map((m) => (
           <div
             key={m.id}
             className={`card p-4 flex items-start gap-4 ${
@@ -93,6 +129,14 @@ export default function MessagesTab() {
           </div>
         ))}
       </div>
+
+      {hasMore && (
+        <div className="flex justify-center pt-2">
+          <button onClick={loadMore} className="btn-secondary text-sm">
+            Mehr laden
+          </button>
+        </div>
+      )}
     </div>
   );
 }

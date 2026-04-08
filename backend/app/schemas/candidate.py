@@ -53,12 +53,18 @@ class CandidateOut(CandidateBase):
     missing_fields: list[str] | None = None
     cv_filename: str | None = None
     has_cv: bool = False
+    has_photo: bool = False
     created_at: datetime
     updated_at: datetime
 
     @classmethod
     def from_orm_candidate(cls, c: Any) -> "CandidateOut":
-        """Serialise a SQLAlchemy Candidate, computing the ``has_cv`` flag."""
+        """Serialise a SQLAlchemy Candidate, computing convenience flags.
+
+        ``photo_url`` is rewritten to the API endpoint that streams the actual
+        photo, so the frontend never has to know the on-disk storage path.
+        """
+        photo_url = f"/api/candidates/{c.id}/photo" if c.photo_url else None
         payload = {
             "id": c.id,
             "first_name": c.first_name,
@@ -69,7 +75,7 @@ class CandidateOut(CandidateBase):
             "address": c.address,
             "location": c.location,
             "language": c.language,
-            "photo_url": c.photo_url,
+            "photo_url": photo_url,
             "headline": c.headline,
             "summary": c.summary,
             "skills": c.skills,
@@ -87,6 +93,7 @@ class CandidateOut(CandidateBase):
             "missing_fields": c.missing_fields,
             "cv_filename": c.cv_filename,
             "has_cv": bool(c.cv_attachment_path),
+            "has_photo": bool(c.photo_url),
             "created_at": c.created_at,
             "updated_at": c.updated_at,
         }

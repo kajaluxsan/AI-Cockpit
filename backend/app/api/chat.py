@@ -13,6 +13,8 @@ both the user turn and the assistant turn (+ tool result) to the
 from __future__ import annotations
 
 import json
+import time
+from collections import defaultdict, deque
 from datetime import datetime
 from typing import Any
 
@@ -31,10 +33,44 @@ from app.models.email_log import EmailDirection, EmailKind
 from app.services import crm
 from app.services.claude_client import get_claude_client
 from app.services.email_service import send_email
+from app.services.event_broker import broker
 from app.services.voice_agent import initiate_call as twilio_initiate_call
 from app.utils.prompts import CANDIDATE_CHAT_SYSTEM_PROMPT
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Rate limiter (per-candidate sliding window)
+# ---------------------------------------------------------------------------
+# The AI chat has two expensive side effects: a Claude call on every turn
+# and, on tool-call, an outbound email or an outbound Twilio call. A runaway
+# agent loop (or a tab left open overnight) could easily rack up hundreds of
+# calls against a single candidate. This sliding-window limiter caps turns
+# per candidate per minute. It lives in-memory — good enough for a single
+# backend process; swap for Redis if you ever run replicas.
+_CHAT_WINDOW_SECONDS = 60
+_CHAT_MAX_TURNS = 12
+_chat_turns: dict[int, deque[float]] = defaultdict(deque)
+
+
+def _check_rate_limit(candidate_id: int) -> None:
+    """Raise 429 if the chat exceeded ``_CHAT_MAX_TURNS`` per window."""
+    now = time.monotonic()
+    window = _chat_turns[candidate_id]
+    cutoff = now - _CHAT_WINDOW_SECONDS
+    while window and window[0] < cutoff:
+        window.popleft()
+    if len(window) >= _CHAT_MAX_TURNS:
+        retry_in = int(_CHAT_WINDOW_SECONDS - (now - window[0])) + 1
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Chat-Rate-Limit erreicht ({_CHAT_MAX_TURNS} Nachrichten / "
+                f"{_CHAT_WINDOW_SECONDS}s). Bitte {retry_in}s warten."
+            ),
+            headers={"Retry-After": str(retry_in)},
+        )
+    window.append(now)
 
 
 class ChatMessageOut(BaseModel):
@@ -159,6 +195,8 @@ async def send_message(
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
 
+    _check_rate_limit(candidate_id)
+
     settings = get_settings()
     protocol = await _build_protocol_snippet(db, candidate_id)
     system_prompt = CANDIDATE_CHAT_SYSTEM_PROMPT.format(
@@ -249,6 +287,15 @@ async def send_message(
 
     await db.commit()
 
+    # Live-notify open chat dock windows for this candidate
+    await broker.publish(
+        "chat.append",
+        {
+            "candidate_id": candidate_id,
+            "action": parsed.get("action"),
+        },
+    )
+
     rows = await _load_history(db, candidate_id)
     return [
         ChatMessageOut(
@@ -316,10 +363,12 @@ async def _execute_initiate_call(
 ) -> str:
     if not candidate.phone:
         return "Fehlgeschlagen: Kandidat hat keine Telefonnummer."
+    reason = (args.get("reason") or "").strip()
     try:
         info = twilio_initiate_call(
             to_number=candidate.phone,
             candidate_id=candidate.id,
+            objective=reason or None,
         )
     except Exception as exc:
         return f"Fehlgeschlagen: Twilio-Fehler: {exc}"
@@ -330,7 +379,10 @@ async def _execute_initiate_call(
         from_number=info.get("from"),
         to_number=info.get("to"),
         status=CallStatus.INITIATED,
+        # Persist what the recruiter (via the AI chat) actually wanted to ask
+        # — surfaces in the call protocol so the recruiter can verify the AI
+        # raised the right topics on the call.
+        summary=(f"Auftrag aus AI-Chat: {reason}" if reason else None),
     )
     db.add(log)
-    reason = (args.get("reason") or "").strip()
     return f"Anruf initiiert an {candidate.phone}. Grund: {reason or '—'}"

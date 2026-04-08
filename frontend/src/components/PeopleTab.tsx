@@ -1,10 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { useApi } from "@/hooks/useApi";
+import { useLiveEvent } from "@/hooks/useLiveEvents";
 import { candidates as candidatesApi } from "@/lib/api";
+import type { Candidate } from "@/types";
 import { useChatDock } from "./chat/ChatDockContext";
 import Avatar from "./shared/Avatar";
 import StatusBadge from "./StatusBadge";
+
+const PAGE_SIZE = 60;
 
 const STATUS_OPTIONS = [
   "all",
@@ -29,16 +32,54 @@ export default function PeopleTab() {
   const [sort, setSort] = useState<"recent" | "name">("recent");
   const { open: openChat } = useChatDock();
 
-  const { data, loading, reload } = useApi(
-    () =>
-      candidatesApi.list({
-        q: q.trim() || undefined,
-        status: status === "all" ? undefined : status,
-        sort,
-        limit: 60,
-      }),
-    [q, status, sort]
-  );
+  const [items, setItems] = useState<Candidate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+
+  const fetchPage = async (offset: number) => {
+    const rows = await candidatesApi.list({
+      q: q.trim() || undefined,
+      status: status === "all" ? undefined : status,
+      sort,
+      limit: PAGE_SIZE,
+      offset,
+    });
+    return rows;
+  };
+
+  const reload = async () => {
+    setLoading(true);
+    try {
+      const rows = await fetchPage(0);
+      setItems(rows);
+      setHasMore(rows.length === PAGE_SIZE);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadMore = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const rows = await fetchPage(items.length);
+      setItems((prev) => [...prev, ...rows]);
+      setHasMore(rows.length === PAGE_SIZE);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, status, sort]);
+
+  // New inbound message → list sort order may have changed; reload.
+  useLiveEvent("message.new", () => {
+    reload();
+  });
 
   const heading = useMemo(() => {
     if (q) return `Treffer für "${q}"`;
@@ -98,14 +139,14 @@ export default function PeopleTab() {
         </div>
 
         {loading && <div className="text-text-muted text-sm">Lade…</div>}
-        {!loading && (data?.length ?? 0) === 0 && (
+        {!loading && items.length === 0 && (
           <div className="card p-8 text-center text-text-muted">
             Keine Kandidaten gefunden.
           </div>
         )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {(data ?? []).map((c) => {
+          {items.map((c) => {
             const name =
               c.full_name ||
               [c.first_name, c.last_name].filter(Boolean).join(" ") ||
@@ -146,6 +187,18 @@ export default function PeopleTab() {
             );
           })}
         </div>
+
+        {hasMore && (
+          <div className="flex justify-center pt-2">
+            <button
+              onClick={loadMore}
+              disabled={loadingMore}
+              className="btn-secondary text-sm"
+            >
+              {loadingMore ? "Lade…" : "Mehr laden"}
+            </button>
+          </div>
+        )}
       </section>
     </div>
   );

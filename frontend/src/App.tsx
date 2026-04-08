@@ -12,9 +12,11 @@ import EmailLog from "./components/EmailLog";
 import Settings from "./components/Settings";
 import { ChatDockProvider } from "./components/chat/ChatDockContext";
 import ChatDock from "./components/chat/ChatDock";
+import { LiveEventsProvider } from "./hooks/useLiveEvents";
 
 export default function App() {
   return (
+    <LiveEventsProvider>
     <ChatDockProvider>
       <Routes>
         <Route element={<Layout />}>
@@ -33,5 +35,6 @@ export default function App() {
       </Routes>
       <ChatDock />
     </ChatDockProvider>
+    </LiveEventsProvider>
   );
 }

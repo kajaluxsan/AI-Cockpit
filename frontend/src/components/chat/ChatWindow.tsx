@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { calls as callsApi, chat as chatApi, candidates } from "@/lib/api";
+import { useLiveEvent } from "@/hooks/useLiveEvents";
 import type { ChatMessage } from "@/types";
 import Avatar from "../shared/Avatar";
 
@@ -58,6 +59,18 @@ export default function ChatWindow({
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [history, minimized]);
+
+  // When anyone (including other tabs / another user) appends to this
+  // candidate's chat, pull the fresh history.
+  useLiveEvent("chat.append", (evt) => {
+    if (evt.payload?.candidate_id !== candidateId) return;
+    chatApi
+      .history(candidateId)
+      .then((h) => setHistory(h))
+      .catch(() => {
+        /* ignore — a failed live refresh shouldn't close the window */
+      });
+  });
 
   const send = async () => {
     const content = input.trim();
