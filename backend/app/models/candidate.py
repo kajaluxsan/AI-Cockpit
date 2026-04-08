@@ -1,4 +1,4 @@
-"""Candidate model."""
+"""Candidate (CRM profile) model."""
 
 from __future__ import annotations
 
@@ -30,16 +30,29 @@ class CandidateSource(str, Enum):
 
 
 class Candidate(Base):
+    """CRM profile for a candidate.
+
+    A candidate is identified primarily by email address. When a new CV or
+    message is received, :func:`app.services.crm.upsert_candidate_from_parse`
+    checks whether a profile with the same email already exists and updates it
+    in place — so the protocol (email / call / chat history) remains attached
+    to a single profile over time.
+    """
+
     __tablename__ = "candidates"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
-    # Identity
+    # Identity (first_name, last_name, email, phone required by the CRM layer)
+    first_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     full_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     email: Mapped[str | None] = mapped_column(String(200), index=True, nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    address: Mapped[str | None] = mapped_column(String(300), nullable=True)
     location: Mapped[str | None] = mapped_column(String(200), nullable=True)
     language: Mapped[str | None] = mapped_column(String(10), nullable=True)  # de | en
+    photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Profile
     headline: Mapped[str | None] = mapped_column(String(300), nullable=True)
@@ -60,6 +73,7 @@ class Candidate(Base):
     source_reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
     cv_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     cv_attachment_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cv_filename: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     # Status
     status: Mapped[CandidateStatus] = mapped_column(
@@ -82,5 +96,8 @@ class Candidate(Base):
         back_populates="candidate", cascade="all, delete-orphan"
     )
     email_logs: Mapped[list["EmailLog"]] = relationship(  # noqa: F821
+        back_populates="candidate", cascade="all, delete-orphan"
+    )
+    chat_messages: Mapped[list["ChatMessage"]] = relationship(  # noqa: F821
         back_populates="candidate", cascade="all, delete-orphan"
     )

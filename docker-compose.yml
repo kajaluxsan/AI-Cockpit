@@ -25,11 +25,13 @@ services:
     env_file: .env
     environment:
       POSTGRES_HOST: postgres
+      CV_STORAGE_DIR: /data/cv
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
       - backend_venv:/app/.venv
+      - cv_storage:/data/cv
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,3 +57,4 @@ services:
 volumes:
   postgres_data:
   backend_venv:
+  cv_storage:

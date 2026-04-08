@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.models.candidate import Candidate
 from app.models.job import Job, JobStatus
+from app.schemas.candidate import CandidateOut
 from app.schemas.job import JobCreate, JobOut, JobUpdate
+from app.services.matching_engine import find_matches_for_job, to_dict
 
 router = APIRouter()
 
@@ -25,8 +30,15 @@ async def list_jobs(
     if status:
         query = query.where(Job.status == status)
     if q:
-        like = f"%{q}%"
-        query = query.where((Job.title.ilike(like)) | (Job.company.ilike(like)))
+        like = f"%{q.strip()}%"
+        query = query.where(
+            or_(
+                Job.title.ilike(like),
+                Job.company.ilike(like),
+                Job.location.ilike(like),
+                Job.description.ilike(like),
+            )
+        )
     query = query.offset(offset).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
@@ -73,3 +85,26 @@ async def delete_job(job_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job not found")
     await db.delete(job)
     await db.commit()
+
+
+@router.get("/{job_id}/candidates", response_model=list[dict[str, Any]])
+async def matching_candidates(
+    job_id: int,
+    limit: int = Query(default=25, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return candidates ranked by fit for this job."""
+    job = (await db.execute(select(Job).where(Job.id == job_id))).scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    pool = (
+        await db.execute(select(Candidate).limit(limit * 4))
+    ).scalars().all()
+    ranked = await find_matches_for_job(job, list(pool))
+    return [
+        {
+            "candidate": CandidateOut.from_orm_candidate(cand).model_dump(mode="json"),
+            "match": to_dict(result),
+        }
+        for cand, result in ranked[:limit]
+    ]
