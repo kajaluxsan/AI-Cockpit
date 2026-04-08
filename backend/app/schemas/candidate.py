@@ -54,6 +54,15 @@ class CandidateOut(CandidateBase):
     cv_filename: str | None = None
     has_cv: bool = False
     has_photo: bool = False
+    linkedin_url: str | None = None
+    # GDPR / FADP surface fields. The frontend uses these to render
+    # "consent pending" / "anonymised" badges and to decide whether the
+    # anonymise button should be enabled.
+    consent_given_at: datetime | None = None
+    consent_source: str | None = None
+    anonymised: bool = False
+    deletion_requested_at: datetime | None = None
+    retain_until: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -94,6 +103,12 @@ class CandidateOut(CandidateBase):
             "cv_filename": c.cv_filename,
             "has_cv": bool(c.cv_attachment_path),
             "has_photo": bool(c.photo_url),
+            "linkedin_url": getattr(c, "linkedin_url", None),
+            "consent_given_at": getattr(c, "consent_given_at", None),
+            "consent_source": getattr(c, "consent_source", None),
+            "anonymised": getattr(c, "anonymised", False),
+            "deletion_requested_at": getattr(c, "deletion_requested_at", None),
+            "retain_until": getattr(c, "retain_until", None),
             "created_at": c.created_at,
             "updated_at": c.updated_at,
         }

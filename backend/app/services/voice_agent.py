@@ -129,6 +129,34 @@ def generate_voice_twiml(
 # ---------------------------------------------------------------------------
 # ElevenLabs TTS
 # ---------------------------------------------------------------------------
+def _voice_id_for_language(settings, language: str) -> str | None:
+    """Pick the ElevenLabs voice id for the caller's language.
+
+    Order of preference:
+      de → DE voice → EN voice
+      en → EN voice → DE voice
+      fr → FR voice → EN voice → DE voice
+      it → IT voice → EN voice → DE voice
+
+    This means a minimally configured deployment (just DE + EN) still has
+    a voice for every caller — the agent might sound slightly accented
+    but won't fall silent.
+    """
+    de = settings.elevenlabs_voice_id_de
+    en = settings.elevenlabs_voice_id_en
+    fr = settings.elevenlabs_voice_id_fr
+    it = settings.elevenlabs_voice_id_it
+    if language == "de":
+        return de or en
+    if language == "en":
+        return en or de
+    if language == "fr":
+        return fr or en or de
+    if language == "it":
+        return it or en or de
+    return de or en
+
+
 async def synthesize_speech(text: str, language: str = "de") -> bytes:
     """Convert text to PCM audio bytes via ElevenLabs."""
     import httpx
@@ -138,9 +166,11 @@ async def synthesize_speech(text: str, language: str = "de") -> bytes:
         logger.warning("ElevenLabs API key not configured")
         return b""
 
-    voice_id = (
-        settings.elevenlabs_voice_id_de if language == "de" else settings.elevenlabs_voice_id_en
-    )
+    # Pick the per-language voice, falling back through a sensible chain so
+    # that a partially configured deployment (e.g. only DE and EN voices
+    # provisioned) still produces audio for FR/IT callers instead of a
+    # silent stream.
+    voice_id = _voice_id_for_language(settings, language)
     if not voice_id:
         logger.warning(f"No ElevenLabs voice id configured for language={language}")
         return b""

@@ -24,6 +24,7 @@ from app.api import (
 )
 from app.config import get_settings
 from app.workers.email_poller import EmailPoller
+from app.workers.gdpr_purge import GDPRPurgeWorker
 from app.workers.linkedin_poller import LinkedInPoller
 
 settings = get_settings()
@@ -57,6 +58,14 @@ async def lifespan(app: FastAPI):
         logger.info("External API source enabled")
     else:
         logger.info("External API source disabled")
+
+    # GDPR retention purge — always scheduled; worker decides internally
+    # whether to run based on GDPR_RETENTION_DAYS.
+    gdpr_worker = GDPRPurgeWorker()
+    task = asyncio.create_task(gdpr_worker.run_forever())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    logger.info("GDPR purge worker scheduled")
 
     yield
 

@@ -34,6 +34,13 @@ export interface Candidate {
   missing_fields: string[] | null;
   cv_filename: string | null;
   has_cv: boolean;
+  linkedin_url?: string | null;
+  // GDPR / FADP surface
+  consent_given_at?: string | null;
+  consent_source?: string | null;
+  anonymised?: boolean;
+  deletion_requested_at?: string | null;
+  retain_until?: string | null;
   created_at: string;
   updated_at: string;
   notes?: string | null;

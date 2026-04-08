@@ -13,7 +13,7 @@ export default function CandidateDetail() {
   const [showCv, setShowCv] = useState(false);
   const { open: openChat } = useChatDock();
 
-  const { data: candidate, loading } = useApi(
+  const { data: candidate, loading, reload: reloadCandidate } = useApi(
     () => candidates.get(candidateId),
     [candidateId]
   );
@@ -25,6 +25,34 @@ export default function CandidateDetail() {
     () => candidates.matchingJobs(candidateId),
     [candidateId]
   );
+
+  const handleRecordConsent = async () => {
+    try {
+      await candidates.recordConsent(candidateId, "manual");
+      reloadCandidate();
+    } catch (e: any) {
+      alert(`Fehler: ${e?.response?.data?.detail || e.message}`);
+    }
+  };
+
+  const handleAnonymise = async () => {
+    if (
+      !confirm(
+        "Recht auf Vergessenwerden: alle personenbezogenen Daten dieses " +
+          "Kandidaten werden unwiderruflich gelöscht (CV, Foto, Mails, Chat). " +
+          "Der Datensatz bleibt für Statistiken erhalten, kann aber nicht " +
+          "mehr kontaktiert werden.\n\nFortfahren?"
+      )
+    ) {
+      return;
+    }
+    try {
+      await candidates.anonymise(candidateId);
+      reloadCandidate();
+    } catch (e: any) {
+      alert(`Fehler: ${e?.response?.data?.detail || e.message}`);
+    }
+  };
 
   const handleCall = async () => {
     setCallMessage(null);
@@ -187,6 +215,60 @@ export default function CandidateDetail() {
           </div>
         </section>
       </div>
+
+      <section className="card p-6">
+        <h2 className="font-display text-lg font-semibold mb-1">
+          GDPR / FADP
+        </h2>
+        <p className="text-xs text-text-muted mb-4">
+          Einwilligung und Recht auf Vergessenwerden (Art. 17 DSGVO / Art.
+          32 DSG).
+        </p>
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="text-sm">
+            <div className="label-mono">Einwilligung</div>
+            {candidate.consent_given_at ? (
+              <div className="text-text-secondary">
+                ✓ erteilt am{" "}
+                {new Date(candidate.consent_given_at).toLocaleDateString("de-CH")}
+                {candidate.consent_source && (
+                  <span className="text-text-muted">
+                    {" "}
+                    ({candidate.consent_source})
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="text-amber-accent">ausstehend</div>
+            )}
+          </div>
+          <div className="text-sm">
+            <div className="label-mono">Status</div>
+            {candidate.anonymised ? (
+              <div className="text-rose-400">anonymisiert</div>
+            ) : (
+              <div className="text-text-secondary">aktiv</div>
+            )}
+          </div>
+          <div className="flex-1" />
+          {!candidate.consent_given_at && !candidate.anonymised && (
+            <button
+              onClick={handleRecordConsent}
+              className="btn-secondary text-sm"
+            >
+              Einwilligung vermerken
+            </button>
+          )}
+          {!candidate.anonymised && (
+            <button
+              onClick={handleAnonymise}
+              className="btn-ghost text-sm text-rose-400 hover:bg-rose-500/10"
+            >
+              Löschen (anonymisieren)
+            </button>
+          )}
+        </div>
+      </section>
 
       <section className="card p-6">
         <h2 className="font-display text-lg font-semibold mb-3">Protokoll</h2>

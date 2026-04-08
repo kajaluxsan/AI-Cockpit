@@ -23,7 +23,7 @@ from app.schemas.candidate import (
     CandidateUpdate,
     ProtocolEntry,
 )
-from app.services import crm, cv_parser
+from app.services import crm, cv_parser, gdpr
 from app.services.matching_engine import find_matches_for_candidate, to_dict
 from app.services.photo_extractor import PHOTO_STORAGE_DIR, extract_photo
 
@@ -145,6 +145,51 @@ async def delete_candidate(candidate_id: int, db: AsyncSession = Depends(get_db)
         raise HTTPException(status_code=404, detail="Candidate not found")
     await db.delete(candidate)
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# GDPR / Swiss FADP endpoints
+# ---------------------------------------------------------------------------
+@router.post("/{candidate_id}/anonymise", response_model=CandidateOut)
+async def anonymise_candidate_endpoint(
+    candidate_id: int, db: AsyncSession = Depends(get_db)
+):
+    """Right to be forgotten: blanks every PII field on the candidate and
+    every related row (emails, chat, CV file on disk), keeping the id so
+    historical counts and foreign keys stay intact. This action is
+    irreversible — there is no undo."""
+    candidate = (
+        await db.execute(select(Candidate).where(Candidate.id == candidate_id))
+    ).scalar_one_or_none()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    if candidate.anonymised:
+        # Idempotent — calling it twice is not an error
+        return _serialize(candidate)
+    await gdpr.anonymise_candidate(db, candidate)
+    await db.commit()
+    await db.refresh(candidate)
+    return _serialize(candidate)
+
+
+@router.post("/{candidate_id}/consent", response_model=CandidateOut)
+async def record_consent_endpoint(
+    candidate_id: int,
+    source: str = Query(..., min_length=1, max_length=120),
+    db: AsyncSession = Depends(get_db),
+):
+    """Record that the candidate has given consent for data processing.
+    ``source`` is a short label identifying where the consent came from
+    (e.g. ``webform``, ``email_reply``, ``manual``, ``phone``)."""
+    candidate = (
+        await db.execute(select(Candidate).where(Candidate.id == candidate_id))
+    ).scalar_one_or_none()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    gdpr.record_consent(candidate, source=source)
+    await db.commit()
+    await db.refresh(candidate)
+    return _serialize(candidate)
 
 
 @router.get("/{candidate_id}/photo")

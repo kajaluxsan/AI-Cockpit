@@ -100,6 +100,15 @@ export const candidates = {
 
   saveNotes: (id: number, notes: string) =>
     http.post<Candidate>(`/api/candidates/${id}/notes`, { notes }).then((r) => r.data),
+
+  // GDPR / FADP actions
+  anonymise: (id: number) =>
+    http.post<Candidate>(`/api/candidates/${id}/anonymise`).then((r) => r.data),
+
+  recordConsent: (id: number, source: string) =>
+    http
+      .post<Candidate>(`/api/candidates/${id}/consent`, null, { params: { source } })
+      .then((r) => r.data),
 };
 
 // ---------------------------------------------------------------------------

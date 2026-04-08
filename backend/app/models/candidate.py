@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import JSON, DateTime, Enum as SAEnum, Integer, String, Text, func
+from sqlalchemy import Boolean, JSON, DateTime, Enum as SAEnum, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -81,6 +81,44 @@ class Candidate(Base):
     )
     missing_fields: Mapped[list | None] = mapped_column(JSON, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # LinkedIn integration — the URL is stored separately from the generic
+    # source_reference so the frontend can render a clickable chip even when
+    # the candidate was originally imported from email.
+    linkedin_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # ---------------------------------------------------------------
+    # GDPR / Swiss FADP fields
+    # ---------------------------------------------------------------
+    # ``consent_given_at`` is set the first time the candidate opts in
+    # (e.g. by applying through the recruiter's webapp or replying
+    # affirmatively to a consent mail). While null the recruiter knows the
+    # profile is "pending consent" and must not be used for outbound
+    # marketing. It is *not* a hard block — Swiss recruiting often runs
+    # on legitimate interest — but it's the audit trail the DPO will
+    # demand.
+    consent_given_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    consent_source: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    # Right to be forgotten: when set, the record is anonymised (all PII
+    # blanked) but the id is kept so downstream logs and match history
+    # don't break. The scheduled purge worker refuses to delete records
+    # where ``deletion_requested_at`` is set — anonymisation is the
+    # explicit action.
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    anonymised: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
+
+    # Optional hard override of the retention clock. When null, the
+    # worker computes ``rejected_at + GDPR_RETENTION_DAYS``.
+    retain_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
