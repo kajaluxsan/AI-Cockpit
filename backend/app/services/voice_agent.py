@@ -72,6 +72,12 @@ def initiate_call(
     if objective:
         voice_url += f"&objective={quote_plus(objective[:500])}"
 
+    # Turn on Twilio's server-side call recording so the recruiter can
+    # replay the audio from the candidate protocol. ``record=True`` is
+    # the "dual-channel, both parties" option. The recording URL lands
+    # on the call resource once Twilio finishes encoding, and Twilio
+    # POSTs to ``recording_status_callback`` so we can pick it up and
+    # write it onto the CallLog row without polling.
     call = client.calls.create(
         to=to_number,
         from_=settings.twilio_phone_number,
@@ -82,14 +88,36 @@ def initiate_call(
         ),
         status_callback_event=["initiated", "ringing", "answered", "completed"],
         status_callback_method="POST",
+        record=True,
+        recording_channels="dual",
+        recording_status_callback=f"{base}/api/webhooks/twilio/recording",
+        recording_status_callback_method="POST",
+        recording_status_callback_event=["completed"],
     )
-    logger.info(f"Twilio call initiated: SID={call.sid} to={to_number}")
+    logger.info(
+        f"Twilio call initiated: SID={call.sid} to={to_number} recording=enabled"
+    )
     return {
         "sid": call.sid,
         "to": to_number,
         "from": settings.twilio_phone_number,
         "status": call.status,
     }
+
+
+def hangup_call(call_sid: str) -> dict[str, Any]:
+    """End an in-flight Twilio call.
+
+    Used by the "end call" button in the frontend so the recruiter can
+    take over (or abort) a live AI conversation. Twilio honours the
+    ``status=completed`` update even while the call is connected; the
+    ``status_callback`` we registered at initiate time will then fire
+    with the final state, so no extra bookkeeping is needed here.
+    """
+    client = get_twilio_client()
+    call = client.calls(call_sid).update(status="completed")
+    logger.info(f"Twilio call hangup: SID={call_sid} status={call.status}")
+    return {"sid": call_sid, "status": call.status}
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +157,34 @@ def generate_voice_twiml(
 # ---------------------------------------------------------------------------
 # ElevenLabs TTS
 # ---------------------------------------------------------------------------
+def _voice_id_for_language(settings, language: str) -> str | None:
+    """Pick the ElevenLabs voice id for the caller's language.
+
+    Order of preference:
+      de → DE voice → EN voice
+      en → EN voice → DE voice
+      fr → FR voice → EN voice → DE voice
+      it → IT voice → EN voice → DE voice
+
+    This means a minimally configured deployment (just DE + EN) still has
+    a voice for every caller — the agent might sound slightly accented
+    but won't fall silent.
+    """
+    de = settings.elevenlabs_voice_id_de
+    en = settings.elevenlabs_voice_id_en
+    fr = settings.elevenlabs_voice_id_fr
+    it = settings.elevenlabs_voice_id_it
+    if language == "de":
+        return de or en
+    if language == "en":
+        return en or de
+    if language == "fr":
+        return fr or en or de
+    if language == "it":
+        return it or en or de
+    return de or en
+
+
 async def synthesize_speech(text: str, language: str = "de") -> bytes:
     """Convert text to PCM audio bytes via ElevenLabs."""
     import httpx
@@ -138,9 +194,11 @@ async def synthesize_speech(text: str, language: str = "de") -> bytes:
         logger.warning("ElevenLabs API key not configured")
         return b""
 
-    voice_id = (
-        settings.elevenlabs_voice_id_de if language == "de" else settings.elevenlabs_voice_id_en
-    )
+    # Pick the per-language voice, falling back through a sensible chain so
+    # that a partially configured deployment (e.g. only DE and EN voices
+    # provisioned) still produces audio for FR/IT callers instead of a
+    # silent stream.
+    voice_id = _voice_id_for_language(settings, language)
     if not voice_id:
         logger.warning(f"No ElevenLabs voice id configured for language={language}")
         return b""

@@ -15,6 +15,7 @@ from loguru import logger
 from app.config import get_settings
 from app.models.candidate import Candidate
 from app.models.job import Job
+from app.services import vector_index
 from app.services.claude_client import get_claude_client
 from app.utils.prompts import MATCH_ANALYSIS_PROMPT
 
@@ -189,11 +190,49 @@ def is_match(result: MatchResult) -> bool:
     return result.score >= settings.match_threshold_percent
 
 
+async def _semantic_filter_jobs(
+    candidate: Candidate, jobs: list[Job]
+) -> list[Job]:
+    """Shortlist ``jobs`` to the semantic top-K neighbours of ``candidate``.
+
+    Falls back to the full list when the vector index is disabled or
+    empty, so the caller's behaviour is identical in both modes.
+    """
+    if not vector_index.is_enabled() or not jobs:
+        return jobs
+    hits = await vector_index.search_jobs_for_candidate(candidate)
+    if not hits:
+        return jobs
+    by_id = {j.id: j for j in jobs}
+    # Preserve Qdrant's ordering so the highest-similarity jobs are
+    # scored first — relevant if we ever cap downstream calls.
+    ordered = [by_id[hid] for hid, _ in hits if hid in by_id]
+    if not ordered:
+        return jobs
+    return ordered
+
+
+async def _semantic_filter_candidates(
+    job: Job, candidates: list[Candidate]
+) -> list[Candidate]:
+    if not vector_index.is_enabled() or not candidates:
+        return candidates
+    hits = await vector_index.search_candidates_for_job(job)
+    if not hits:
+        return candidates
+    by_id = {c.id: c for c in candidates}
+    ordered = [by_id[hid] for hid, _ in hits if hid in by_id]
+    if not ordered:
+        return candidates
+    return ordered
+
+
 async def find_matches_for_candidate(
     candidate: Candidate, jobs: list[Job]
 ) -> list[tuple[Job, MatchResult]]:
+    shortlist = await _semantic_filter_jobs(candidate, jobs)
     out = []
-    for job in jobs:
+    for job in shortlist:
         result = await score_match(candidate, job)
         out.append((job, result))
     out.sort(key=lambda x: x[1].score, reverse=True)
@@ -203,8 +242,9 @@ async def find_matches_for_candidate(
 async def find_matches_for_job(
     job: Job, candidates: list[Candidate]
 ) -> list[tuple[Candidate, MatchResult]]:
+    shortlist = await _semantic_filter_candidates(job, candidates)
     out = []
-    for candidate in candidates:
+    for candidate in shortlist:
         result = await score_match(candidate, job)
         out.append((candidate, result))
     out.sort(key=lambda x: x[1].score, reverse=True)

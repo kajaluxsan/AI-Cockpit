@@ -6,18 +6,33 @@ import Avatar from "./shared/Avatar";
 import StatusBadge from "./StatusBadge";
 import { useChatDock } from "./chat/ChatDockContext";
 
+// Call statuses that still allow a "hangup" button to be shown.
+const NON_TERMINAL_CALL_STATUSES = new Set([
+  "initiated",
+  "ringing",
+  "in_progress",
+]);
+
+function formatDuration(seconds: number | null | undefined): string {
+  if (!seconds || seconds <= 0) return "";
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 export default function CandidateDetail() {
   const { id } = useParams();
   const candidateId = Number(id);
   const [callMessage, setCallMessage] = useState<string | null>(null);
   const [showCv, setShowCv] = useState(false);
+  const [hangupBusy, setHangupBusy] = useState<number | null>(null);
   const { open: openChat } = useChatDock();
 
-  const { data: candidate, loading } = useApi(
+  const { data: candidate, loading, reload: reloadCandidate } = useApi(
     () => candidates.get(candidateId),
     [candidateId]
   );
-  const { data: protocol } = useApi(
+  const { data: protocol, reload: reloadProtocol } = useApi(
     () => candidates.protocol(candidateId),
     [candidateId]
   );
@@ -26,13 +41,78 @@ export default function CandidateDetail() {
     [candidateId]
   );
 
+  const handleRecordConsent = async () => {
+    try {
+      await candidates.recordConsent(candidateId, "manual");
+      reloadCandidate();
+    } catch (e: any) {
+      alert(`Fehler: ${e?.response?.data?.detail || e.message}`);
+    }
+  };
+
+  const handleAnonymise = async () => {
+    if (
+      !confirm(
+        "Recht auf Vergessenwerden: alle personenbezogenen Daten dieses " +
+          "Kandidaten werden unwiderruflich gelöscht (CV, Foto, Mails, Chat). " +
+          "Der Datensatz bleibt für Statistiken erhalten, kann aber nicht " +
+          "mehr kontaktiert werden.\n\nFortfahren?"
+      )
+    ) {
+      return;
+    }
+    try {
+      await candidates.anonymise(candidateId);
+      reloadCandidate();
+    } catch (e: any) {
+      alert(`Fehler: ${e?.response?.data?.detail || e.message}`);
+    }
+  };
+
   const handleCall = async () => {
     setCallMessage(null);
     try {
       const result = await callsApi.initiate({ candidate_id: candidateId });
       setCallMessage(`Anruf initiiert (SID: ${result.twilio_call_sid})`);
+      reloadProtocol();
     } catch (e: any) {
       setCallMessage(`Fehler: ${e?.response?.data?.detail || e.message}`);
+    }
+  };
+
+  const handleLinkedInImport = async () => {
+    const fallback = candidate?.linkedin_url || "";
+    const url = prompt(
+      "LinkedIn-Profil-URL:",
+      fallback
+    );
+    if (url === null) return;
+    const trimmed = url.trim();
+    if (!trimmed) return;
+    try {
+      const result = await candidates.importLinkedIn(candidateId, trimmed);
+      const count = result.updated_fields.length;
+      alert(
+        count === 0
+          ? "LinkedIn-Import abgeschlossen: keine neuen Felder."
+          : `LinkedIn-Import: ${count} Feld(er) aktualisiert (${result.updated_fields.join(", ")}).`
+      );
+      reloadCandidate();
+    } catch (e: any) {
+      alert(`Fehler: ${e?.response?.data?.detail || e.message}`);
+    }
+  };
+
+  const handleHangup = async (callId: number) => {
+    if (!confirm("Laufenden Anruf wirklich beenden?")) return;
+    setHangupBusy(callId);
+    try {
+      await callsApi.hangup(callId);
+      reloadProtocol();
+    } catch (e: any) {
+      alert(`Fehler: ${e?.response?.data?.detail || e.message}`);
+    } finally {
+      setHangupBusy(null);
     }
   };
 
@@ -78,6 +158,9 @@ export default function CandidateDetail() {
           </button>
           <button onClick={handleCall} className="btn-secondary">
             Anrufen
+          </button>
+          <button onClick={handleLinkedInImport} className="btn-secondary">
+            LinkedIn importieren
           </button>
           {candidate.has_cv && (
             <button
@@ -189,32 +272,117 @@ export default function CandidateDetail() {
       </div>
 
       <section className="card p-6">
+        <h2 className="font-display text-lg font-semibold mb-1">
+          GDPR / FADP
+        </h2>
+        <p className="text-xs text-text-muted mb-4">
+          Einwilligung und Recht auf Vergessenwerden (Art. 17 DSGVO / Art.
+          32 DSG).
+        </p>
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="text-sm">
+            <div className="label-mono">Einwilligung</div>
+            {candidate.consent_given_at ? (
+              <div className="text-text-secondary">
+                ✓ erteilt am{" "}
+                {new Date(candidate.consent_given_at).toLocaleDateString("de-CH")}
+                {candidate.consent_source && (
+                  <span className="text-text-muted">
+                    {" "}
+                    ({candidate.consent_source})
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="text-amber-accent">ausstehend</div>
+            )}
+          </div>
+          <div className="text-sm">
+            <div className="label-mono">Status</div>
+            {candidate.anonymised ? (
+              <div className="text-rose-400">anonymisiert</div>
+            ) : (
+              <div className="text-text-secondary">aktiv</div>
+            )}
+          </div>
+          <div className="flex-1" />
+          {!candidate.consent_given_at && !candidate.anonymised && (
+            <button
+              onClick={handleRecordConsent}
+              className="btn-secondary text-sm"
+            >
+              Einwilligung vermerken
+            </button>
+          )}
+          {!candidate.anonymised && (
+            <button
+              onClick={handleAnonymise}
+              className="btn-ghost text-sm text-rose-400 hover:bg-rose-500/10"
+            >
+              Löschen (anonymisieren)
+            </button>
+          )}
+        </div>
+      </section>
+
+      <section className="card p-6">
         <h2 className="font-display text-lg font-semibold mb-3">Protokoll</h2>
         {(protocol?.length ?? 0) === 0 && (
           <div className="text-text-muted text-sm">Noch keine Kommunikation.</div>
         )}
         <div className="space-y-2">
-          {(protocol ?? []).map((p) => (
-            <div
-              key={`${p.kind}-${p.reference_id}-${p.created_at}`}
-              className="p-3 bg-bg-elevated rounded-md"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-mono text-xs uppercase text-text-muted">
-                  {p.kind} {p.status ? `· ${p.status}` : ""}
-                </span>
-                <span className="label-mono">
-                  {new Date(p.created_at).toLocaleString("de-CH")}
-                </span>
+          {(protocol ?? []).map((p) => {
+            const isCall = p.kind === "call";
+            const canHangup =
+              isCall &&
+              !!p.reference_id &&
+              !!p.status &&
+              NON_TERMINAL_CALL_STATUSES.has(p.status);
+            const duration = formatDuration(p.duration_seconds);
+            return (
+              <div
+                key={`${p.kind}-${p.reference_id}-${p.created_at}`}
+                className="p-3 bg-bg-elevated rounded-md"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-xs uppercase text-text-muted">
+                    {p.kind} {p.status ? `· ${p.status}` : ""}
+                    {duration ? ` · ${duration}` : ""}
+                  </span>
+                  <span className="label-mono">
+                    {new Date(p.created_at).toLocaleString("de-CH")}
+                  </span>
+                </div>
+                <div className="text-sm font-medium mt-1">{p.title}</div>
+                {p.body && (
+                  <p className="text-xs text-text-secondary mt-1 line-clamp-3 whitespace-pre-line">
+                    {p.body}
+                  </p>
+                )}
+                {isCall && p.recording_url && (
+                  <audio
+                    controls
+                    preload="none"
+                    src={p.recording_url}
+                    className="mt-2 w-full"
+                  />
+                )}
+                {canHangup && (
+                  <div className="mt-2">
+                    <button
+                      onClick={() => handleHangup(p.reference_id!)}
+                      disabled={hangupBusy === p.reference_id}
+                      className="btn-ghost text-xs text-rose-400 hover:bg-rose-500/10"
+                    >
+                      {hangupBusy === p.reference_id
+                        ? "Beende…"
+                        : "Anruf beenden"}
+                    </button>
+                  </div>
+                )}
               </div>
-              <div className="text-sm font-medium mt-1">{p.title}</div>
-              {p.body && (
-                <p className="text-xs text-text-secondary mt-1 line-clamp-3 whitespace-pre-line">
-                  {p.body}
-                </p>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </section>
     </div>

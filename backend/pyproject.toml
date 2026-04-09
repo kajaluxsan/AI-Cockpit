@@ -24,10 +24,15 @@ dependencies = [
     "pypdf>=5.1.0",
     "python-docx>=1.1.2",
     "pillow>=11.0.0",
+    "argon2-cffi>=23.1.0",
+    "pyjwt>=2.9.0",
     "websockets>=13.1",
     "tenacity>=9.0.0",
     "email-validator>=2.2.0",
     "python-dateutil>=2.9.0",
+    # Semantic matching (optional at runtime — gated by QDRANT_ENABLED).
+    "qdrant-client>=1.12.0",
+    "fastembed>=0.4.0",
 ]
 
 [tool.uv]

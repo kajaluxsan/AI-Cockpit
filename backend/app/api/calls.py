@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -75,3 +78,55 @@ async def initiate(payload: InitiateCallRequest, db: AsyncSession = Depends(get_
     await db.commit()
     await db.refresh(log)
     return log
+
+
+@router.post("/{call_id}/hangup", response_model=CallLogOut)
+async def hangup_call_endpoint(
+    call_id: int, db: AsyncSession = Depends(get_db)
+) -> CallLog:
+    """End a live call by hitting Twilio's ``calls.update(status=completed)``.
+
+    Used by the "Take over" / "End call" button in the UI so a recruiter
+    can abort the AI conversation mid-flight. The Twilio status-callback
+    webhook will still fire with ``completed`` afterwards, so we only do
+    the minimum local bookkeeping here (mark ``ended_at``) to avoid
+    racing with the callback.
+    """
+    row = (
+        await db.execute(select(CallLog).where(CallLog.id == call_id))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Call not found")
+    if not row.twilio_call_sid:
+        raise HTTPException(
+            status_code=400, detail="Call has no Twilio SID to terminate"
+        )
+    # Terminal state already? Nothing to do — return the row as-is so
+    # the UI doesn't show a misleading error after double-clicks.
+    if row.status in (
+        CallStatus.COMPLETED,
+        CallStatus.CANCELED,
+        CallStatus.FAILED,
+        CallStatus.NO_ANSWER,
+        CallStatus.BUSY,
+    ):
+        logger.info(
+            f"Hangup: call id={row.id} already in terminal state {row.status.value}"
+        )
+        return row
+
+    try:
+        voice_agent.hangup_call(row.twilio_call_sid)
+    except Exception as exc:
+        logger.exception(f"Hangup: Twilio update failed for call={row.id}")
+        raise HTTPException(status_code=502, detail=f"Twilio error: {exc}") from exc
+
+    # Optimistic local update; the Twilio status callback will
+    # overwrite with the authoritative terminal status shortly.
+    row.status = CallStatus.CANCELED
+    if not row.ended_at:
+        row.ended_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(row)
+    logger.info(f"Hangup: call id={row.id} sid={row.twilio_call_sid} ended by user")
+    return row

@@ -17,6 +17,19 @@ services:
       retries: 5
     restart: unless-stopped
 
+  qdrant:
+    # Vector store used by the semantic matching engine. Optional —
+    # set QDRANT_ENABLED=false in .env to skip semantic pre-filtering,
+    # the backend will happily run without this container.
+    image: qdrant/qdrant:v1.12.4
+    container_name: recruiterai-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
@@ -58,3 +71,4 @@ volumes:
   postgres_data:
   backend_venv:
   cv_storage:
+  qdrant_data:

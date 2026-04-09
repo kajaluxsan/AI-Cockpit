@@ -10,31 +10,47 @@ import MatchBoard from "./components/MatchBoard";
 import CallHistory from "./components/CallHistory";
 import EmailLog from "./components/EmailLog";
 import Settings from "./components/Settings";
+import LoginPage from "./components/LoginPage";
+import ProtectedRoute from "./components/ProtectedRoute";
+import EmailTemplates from "./components/EmailTemplates";
+import ReportingDashboard from "./components/ReportingDashboard";
 import { ChatDockProvider } from "./components/chat/ChatDockContext";
 import ChatDock from "./components/chat/ChatDock";
 import { LiveEventsProvider } from "./hooks/useLiveEvents";
+import { AuthProvider } from "./hooks/useAuth";
 
 export default function App() {
   return (
-    <LiveEventsProvider>
-    <ChatDockProvider>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route index element={<Navigate to="/people" replace />} />
-          <Route path="people" element={<PeopleTab />} />
-          <Route path="people/:id" element={<CandidateDetail />} />
-          <Route path="messages" element={<MessagesTab />} />
-          <Route path="jobs" element={<JobsTab />} />
-          <Route path="jobs/:id" element={<JobDetail />} />
-          <Route path="overview" element={<Dashboard />} />
-          <Route path="matches" element={<MatchBoard />} />
-          <Route path="calls" element={<CallHistory />} />
-          <Route path="emails" element={<EmailLog />} />
-          <Route path="settings" element={<Settings />} />
-        </Route>
-      </Routes>
-      <ChatDock />
-    </ChatDockProvider>
-    </LiveEventsProvider>
+    <AuthProvider>
+      <LiveEventsProvider>
+        <ChatDockProvider>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route
+              element={
+                <ProtectedRoute>
+                  <Layout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<Navigate to="/people" replace />} />
+              <Route path="people" element={<PeopleTab />} />
+              <Route path="people/:id" element={<CandidateDetail />} />
+              <Route path="messages" element={<MessagesTab />} />
+              <Route path="jobs" element={<JobsTab />} />
+              <Route path="jobs/:id" element={<JobDetail />} />
+              <Route path="overview" element={<Dashboard />} />
+              <Route path="reports" element={<ReportingDashboard />} />
+              <Route path="matches" element={<MatchBoard />} />
+              <Route path="calls" element={<CallHistory />} />
+              <Route path="emails" element={<EmailLog />} />
+              <Route path="templates" element={<EmailTemplates />} />
+              <Route path="settings" element={<Settings />} />
+            </Route>
+          </Routes>
+          <ChatDock />
+        </ChatDockProvider>
+      </LiveEventsProvider>
+    </AuthProvider>
   );
 }

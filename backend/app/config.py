@@ -117,6 +117,11 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str | None = None
     elevenlabs_voice_id_de: str | None = None
     elevenlabs_voice_id_en: str | None = None
+    # Switzerland has four official languages; each needs its own voice.
+    # Falls back to the EN voice if not configured so the agent doesn't
+    # crash mid-call when someone switches to FR/IT.
+    elevenlabs_voice_id_fr: str | None = None
+    elevenlabs_voice_id_it: str | None = None
     elevenlabs_model_id: str = "eleven_multilingual_v2"
     elevenlabs_stability: float = 0.5
     elevenlabs_similarity_boost: float = 0.75
@@ -159,6 +164,72 @@ class Settings(BaseSettings):
     # when POSTing to /api/messages/inbound. If unset (or empty), the endpoint
     # is open — fine for local dev, NOT acceptable for production.
     inbound_webhook_secret: str | None = None
+
+    # ---------------------------------------------------------------
+    # GDPR / Swiss FADP
+    # ---------------------------------------------------------------
+    # Days after a candidate reaches status=REJECTED before the background
+    # purge worker anonymises the record. Set to 0 to disable automatic
+    # anonymisation (recruiter must do it by hand via the API).
+    gdpr_retention_days: int = 180
+
+    # How often the purge worker runs. Keep it infrequent — once a day is
+    # plenty for a retention window measured in months.
+    gdpr_purge_interval_minutes: int = 1440
+
+    # ---------------------------------------------------------------
+    # AUTHENTICATION
+    # ---------------------------------------------------------------
+    # Shared JWT signing secret. MUST be overridden in production — the
+    # default is a dev-only placeholder and is logged on startup if used
+    # so nobody accidentally ships it.
+    auth_jwt_secret: str = "change-me-jwt-secret"
+    auth_jwt_algorithm: str = "HS256"
+    # Session lifetime in minutes. Default 8h ≈ one recruiter workday.
+    auth_session_minutes: int = 480
+    # Cookie name + flags. ``secure`` is off by default so the dev
+    # server over plain HTTP works; turn it on in production behind TLS.
+    auth_cookie_name: str = "recruiterai_session"
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    # First-boot admin — if no users exist in the DB at startup, create
+    # this one. Leave empty to skip bootstrap (you'd have to seed users
+    # another way, e.g. a manual INSERT).
+    auth_bootstrap_admin_username: str | None = None
+    auth_bootstrap_admin_password: str | None = None
+    auth_bootstrap_admin_email: str | None = None
+
+    # ---------------------------------------------------------------
+    # LINKEDIN (Proxycurl-compatible)
+    # ---------------------------------------------------------------
+    # Optional. If set, the /api/candidates/{id}/import-linkedin endpoint
+    # will fetch the public profile via the Proxycurl Person Profile API
+    # and merge the fields into the candidate record. Leave empty to only
+    # store the URL on the candidate.
+    linkedin_scraper_api_key: str | None = None
+    linkedin_scraper_base_url: str = "https://nubela.co/proxycurl/api/v2/linkedin"
+
+    # ---------------------------------------------------------------
+    # SEMANTIC MATCHING (Qdrant + BGE-M3)
+    # ---------------------------------------------------------------
+    # When enabled and reachable, the matching engine uses dense vector
+    # similarity (via BGE-M3 embeddings stored in Qdrant) to pre-filter
+    # the candidate pool before running the deterministic/LLM scoring
+    # step. When disabled or unreachable, we fall back to the classic
+    # "score every pair" path — the UX is identical, just slower for
+    # large datasets.
+    qdrant_enabled: bool = False
+    qdrant_url: str = "http://qdrant:6333"
+    qdrant_api_key: str | None = None
+    qdrant_collection_candidates: str = "recruiterai_candidates"
+    qdrant_collection_jobs: str = "recruiterai_jobs"
+    # Embedding model to use with fastembed. BGE-M3 gives the best
+    # multilingual quality but is large (~2.2 GB). For tight-memory
+    # setups BAAI/bge-small-en-v1.5 is a reasonable fallback.
+    embedding_model: str = "BAAI/bge-m3"
+    # How many semantic neighbours to retrieve before applying the
+    # deterministic score on top.
+    semantic_top_k: int = 50
 
     # ---------------------------------------------------------------
     # AGENT IDENTITY

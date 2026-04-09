@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,7 +12,7 @@ from app.models.candidate import Candidate
 from app.models.job import Job
 from app.models.match import Match, MatchStatus
 from app.schemas.match import MatchCreate, MatchOut, MatchUpdate
-from app.services import matching_engine
+from app.services import matching_engine, vector_index
 
 router = APIRouter()
 
@@ -81,3 +82,22 @@ async def score_and_create(
     await db.commit()
     await db.refresh(match)
     return match
+
+
+@router.post("/reindex")
+async def reindex_vectors(db: AsyncSession = Depends(get_db)) -> dict:
+    """Rebuild the Qdrant semantic index from scratch.
+
+    Returns ``{"candidates": n, "jobs": m, "enabled": bool}``. When
+    ``qdrant_enabled`` is false (or the dependency is missing), the
+    counts are zero and ``enabled`` is false — the UI can then nudge
+    the admin to flip the env flag.
+    """
+    if not vector_index.is_enabled():
+        logger.info("Reindex requested but qdrant_enabled is false")
+        return {"candidates": 0, "jobs": 0, "enabled": False}
+
+    cands = (await db.execute(select(Candidate))).scalars().all()
+    jobs = (await db.execute(select(Job))).scalars().all()
+    counts = await vector_index.reindex_all(list(cands), list(jobs))
+    return {**counts, "enabled": True}
